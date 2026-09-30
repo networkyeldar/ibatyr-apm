@@ -1,0 +1,16 @@
+{
+  "product_version": "0.4.0-rc1",
+  "target": "Ubuntu 24.04 / Python 3.12 / Java 17",
+  "server": {
+    "version": "10.1.0",
+    "filename": "apache-skywalking-apm-10.1.0.tar.gz",
+    "url": "https://archive.apache.org/dist/skywalking/10.1.0/apache-skywalking-apm-10.1.0.tar.gz",
+    "sha512": "1cacbfc0aaac04dc7437ab782573aa72290d07765836183e3d7e30be7b3163608c6b4b4539892412a0b4467e9ccaed378074b8bd9bd8e70ee127ac390b593a2d"
+  },
+  "agent": {
+    "version": "9.3.0",
+    "filename": "apache-skywalking-java-agent-9.3.0.tgz",
+    "url": "https://archive.apache.org/dist/skywalking/java-agent/9.3.0/apache-skywalking-java-agent-9.3.0.tgz",
+    "sha512": "548d5ae5bbb3f1b94d5741cdba6563a16744c9c2e0cfb2f0fcbabde0884dd2ce0228644aad0a7fb93bbb5daf6b1b1dc0fffdfbb9fbe6f5c70138158e9d379df3"
+  }
+}

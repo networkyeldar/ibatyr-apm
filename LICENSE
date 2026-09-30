@@ -1,0 +1,8 @@
+Project-specific commercial terms are not finalized in this release candidate.
+See legal/COMMERCIAL-TERMS-DRAFT.txt. This file does not grant an open-source
+license for the project-specific iBatyr code or claim ownership of upstream code.
+
+Third-party components retain their respective licenses and rights.
+Apache SkyWalking and its Java agent are distributed under Apache License 2.0;
+the complete original LICENSE and NOTICE files are retained in upstream archives.
+No commercial term for the iBatyr shell supersedes those third-party licenses.

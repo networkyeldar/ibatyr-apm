@@ -1,0 +1,26 @@
+name: Build draft release
+on:
+  push:
+    branches: [main]
+    paths: [VERSION]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r shell/requirements.txt pytest
+      - run: python tools/check_source.py
+      - run: python -m pytest tests -q
+      - run: python tools/build_release.py --with-vendor
+      - name: Draft only; review validation report before publishing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="$(cat VERSION)"
+          gh release create "v$version" packages/* --draft --target "$GITHUB_SHA" --title "iBatyr APM $version" --notes-file docs/RELEASE-NOTES.md

@@ -1,0 +1,25 @@
+name: Tests and packages
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -r shell/requirements.txt pytest
+      - run: python tools/check_source.py
+      - run: python -m pytest tests -q
+      - run: python -m compileall -q shell tools install.py
+      - run: python tools/build_release.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ibatyr-installers
+          path: packages/

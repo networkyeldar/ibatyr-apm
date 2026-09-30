@@ -1,0 +1,6 @@
+fastapi==0.142.1
+uvicorn==0.54.0
+httpx==0.28.1
+pydantic==2.13.5
+cryptography==50.0.1
+sqlglot==30.20.0
