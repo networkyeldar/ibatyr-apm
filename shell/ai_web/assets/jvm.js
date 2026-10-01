@@ -23,7 +23,7 @@ async function refreshJVM(background=false){
     $('jvm-instance').replaceChildren(...options);$('jvm-instance').value=data.instance?.id||'';
     jvm.instance=data.instance?.id||null;
     $('jvm-warnings').replaceChildren(...data.warnings.map(w=>el('p',w)));
-    if(!data.instance){$('jvm-status').textContent=data.warnings.at(-1);return true;}
+    if(!data.instance){clearJVM();$('jvm-warnings').replaceChildren(...data.warnings.map(w=>el('p',w)));$('jvm-status').textContent=data.warnings.at(-1);return true;}
     const d=data.latest||{},fmt=(v,suffix='')=>typeof v==='number'&&Number.isFinite(v)?v.toLocaleString('ru-RU',{maximumFractionDigits:2})+suffix:'—';
     const cards=[['CPU JVM',fmt(d.cpu_percent,'%'),'Минутное среднее'],['Heap',fmt(d.heap_gib,' GiB'),'Из '+fmt(d.heap_max_gib,' GiB')+' · '+fmt(d.heap_percent,'%')],['Потоки',fmt(d.threads_live),'Минутное среднее live'],['BLOCKED',fmt(d.threads_blocked),'Ожидание Java-монитора']];
     $('jvm-stats').replaceChildren(...cards.map(([label,value,note])=>{const box=el('article',null,'stat');box.append(el('span',label,'muted small'),el('strong',value),el('span',note,'muted small'));return box;}));

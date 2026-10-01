@@ -15,7 +15,7 @@ class Handler(SimpleHTTPRequestHandler):
     def log_message(self,*args):pass
 
 server=ThreadingHTTPServer(('127.0.0.1',0),Handler);Thread(target=server.serve_forever,daemon=True).start()
-counts={};queries={};fail_dashboard=False
+counts={};queries={};fail_dashboard=False;missing_jvm=False
 
 def fixture(route):
     global fail_dashboard
@@ -34,6 +34,7 @@ def fixture(route):
         instance={'id':q.get('instance_id','jvm1'),'name':'JVM demo '+q.get('instance_id','jvm1')}
         points=[{'time':(base+timedelta(minutes=i)).isoformat(),'cpu_percent':20+8*math.sin(i*.2),'heap_gib':19+math.sin(i*.1),'heap_max_gib':30,'heap_percent':64,'nonheap_gib':.7,'metaspace_gib':.3,'threads_live':2800+30*math.sin(i*.2),'threads_blocked':68+10*math.sin(i*.1),'threads_runnable':120,'threads_waiting':400,'threads_timed_waiting':2200,'young_gc_ms':1200+400*math.sin(i*.3),'old_gc_ms':0,'normal_gc_ms':0,'young_gc_count':5,'old_gc_count':0,'normal_gc_count':0,'classes_loaded':45000} for i in range(minute_count)]
         data={'service':{'id':'demo','name':'Synergy Demo'},'instances':[{'id':'jvm1','name':'JVM demo jvm1'},{'id':'jvm2','name':'JVM demo jvm2'}],'instance':instance,'points':points,'latest':points[-1],'period':{'start':start,'end_exclusive':end},'coverage':{'requested_minutes':minute_count,'minutes_with_jvm_evidence':minute_count},'warnings':['Synthetic fixture. Not production measurements.']}
+        if missing_jvm:data['instance']=None;data['points']=[];data['latest']=None;data['warnings']=['Выбранный экземпляр не найден.']
     elif p.endswith('/dashboard'):
         if fail_dashboard:route.fulfill(status=502,json={'detail':'Test upstream offline'});return
         points=[{'time':(base+timedelta(minutes=i)).isoformat(),'calls_per_minute':round(450+140*math.sin(i*.25)+35*math.cos(i*.9)),'mean_latency_ms':round(260+90*math.sin(i*.3)+(650 if 28<=i<=32 else 0)),'p95_ms':round(740+230*math.sin(i*.3)+(2000 if 28<=i<=32 else 0)),'error_rate_percent':round(.12+(.7 if 28<=i<=32 else 0)+.08*abs(math.sin(i*.4)),2)} for i in range(minute_count)]
@@ -194,6 +195,12 @@ try:
         direct.set_viewport_size({'width':1500,'height':1100})
         direct.evaluate('window.scrollTo(0,0)')
         direct.screenshot(path='/tmp/ibatyr-jvm-desktop.png',full_page=True)
+        missing_jvm=True
+        with direct.expect_response('**/api/ai/jvm?*'):
+            direct.locator('#refresh-now').click()
+        direct.wait_for_function('!live.busy')
+        assert direct.locator('#jvm-cpu svg').count()==0
+        assert direct.locator('#jvm-stats').inner_text()==''
         direct.locator('#logout').click();direct.locator('#login-screen').wait_for(state='visible')
         assert direct.locator('#jvm-stats').inner_text()==''
         assert not errors,errors
