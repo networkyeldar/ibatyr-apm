@@ -3,7 +3,7 @@ from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 from threading import Thread
 from datetime import datetime, timedelta, timezone
-import json, sys
+import json, sys, math
 from urllib.parse import urlsplit, parse_qs
 from playwright.sync_api import sync_playwright
 
@@ -31,7 +31,7 @@ def fixture(route):
     elif p.endswith('/llm/providers'):data={'providers':[]}
     elif p.endswith('/dashboard'):
         if fail_dashboard:route.fulfill(status=502,json={'detail':'Test upstream offline'});return
-        points=[{'time':(base+timedelta(minutes=i)).isoformat(),'calls_per_minute':100+i*9,'mean_latency_ms':100+i*20,'p95_ms':300+i*24,'error_rate_percent':i%4} for i in range(60)]
+        points=[{'time':(base+timedelta(minutes=i)).isoformat(),'calls_per_minute':round(450+140*math.sin(i*.25)+35*math.cos(i*.9)),'mean_latency_ms':round(260+90*math.sin(i*.3)+(650 if 28<=i<=32 else 0)),'p95_ms':round(740+230*math.sin(i*.3)+(2000 if 28<=i<=32 else 0)),'error_rate_percent':round(.12+(.7 if 28<=i<=32 else 0)+.08*abs(math.sin(i*.4)),2)} for i in range(60)]
         data={'kpis':{'estimated_calls':20000,'estimated_mean_latency_ms':640,'max_minute_p95_ms':4800,'estimated_error_rate_percent':2.1},'points':points,'coverage':{'minutes_with_positive_traffic':60,'requested_minutes':60},'warnings':[]}
     elif p.endswith('/alerts'):
         page=int(q.get('page',1));sev=q.get('severity','CRITICAL');level='UNKNOWN' if sev=='ALL' else sev
@@ -62,6 +62,10 @@ try:
         assert counts.get('/api/ai/traces',0)==traces_before
         page.evaluate('window.scrollTo(0,0)')
         page.screenshot(path='/tmp/ibatyr-live-showcase.png',full_page=False)
+        page.locator('#overview').evaluate("e => e.scrollIntoView({block:'start',behavior:'instant'})")
+        chart_rect=page.locator('#latency-chart svg').bounding_box()
+        page.mouse.move(chart_rect['x']+chart_rect['width']*.6,chart_rect['y']+chart_rect['height']*.5)
+        page.screenshot(path='/tmp/ibatyr-interactive-charts.png',full_page=False)
         page.locator('.alert-card').first.click();assert page.locator('#alert-dialog').is_visible();page.locator('#alert-investigate').click()
         assert not page.locator('#live-enabled').is_checked()
         page.locator('#records .operation').first.click();page.locator('#detail pre').wait_for();before=page.locator('#detail').inner_text()
@@ -70,6 +74,18 @@ try:
         svg=page.locator('#latency-chart svg');svg.focus();svg.press('ArrowRight');svg.press('Enter');page.wait_for_function('!state.busy');assert not page.locator('#live-enabled').is_checked()
         page.locator('#latency-chart .chart-toggles button').last.click();assert page.locator('#latency-chart .chart-toggles button').last.get_attribute('aria-pressed')=='false'
         page.locator('#alert-severity').select_option('ALL');page.locator('.alert-card.unknown').first.wait_for()
+        # Inspect actual point values, then drag a range instead of clicking one minute.
+        svg=page.locator('#traffic-chart svg');svg.scroll_into_view_if_needed();rect=svg.bounding_box()
+        page.mouse.move(rect['x']+rect['width']*.5,rect['y']+rect['height']*.4)
+        assert page.locator('#traffic-chart .chart-floating-tip').is_visible()
+        assert 'Вызовы' in page.locator('#traffic-chart .chart-floating-tip').inner_text()
+        page.mouse.move(rect['x']+rect['width']*.3,rect['y']+rect['height']*.5)
+        page.mouse.down();page.mouse.move(rect['x']+rect['width']*.6,rect['y']+rect['height']*.5,steps=10);page.mouse.up()
+        page.wait_for_function('!state.busy')
+        selected_minutes=page.evaluate("(Date.parse(state.query.end)-Date.parse(state.query.start))/60000")
+        assert 10<selected_minutes<30,selected_minutes
+        page.locator('#overview').scroll_into_view_if_needed()
+
         fail_dashboard=True;page.locator('#refresh-now').click();page.wait_for_function('!live.busy');assert 'Нет свежих данных' in page.locator('#live-status').inner_text();assert page.locator('#latency-chart svg').count()==1
         fail_dashboard=False
         # Editing a date pauses polling and prevents stale requests from overwriting filters.

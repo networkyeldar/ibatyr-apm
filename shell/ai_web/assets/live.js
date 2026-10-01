@@ -54,20 +54,92 @@ function openAlarm(a){
   $('alert-dialog').showModal();
 }
 function drawChart(id,points,series,unit){
-  const box=$(id);box.replaceChildren();const hidden=live.hidden[id]||new Set();live.hidden[id]=hidden;
-  const toggles=el('div',null,'chart-toggles');for(const[key,color,label]of series){const b=el('button',label,'subtle');b.type='button';b.setAttribute('aria-pressed',String(!hidden.has(key)));b.style.borderBottom='2px solid '+color;b.onclick=()=>{hidden.has(key)?hidden.delete(key):hidden.add(key);drawChart(id,points,series,unit);};toggles.append(b);}box.append(toggles);
-  const visible=series.filter(([k])=>!hidden.has(k)),numbers=points.flatMap(p=>visible.map(([k])=>p[k])).filter(v=>v!==null&&Number.isFinite(v));
+  const box=$(id);box.replaceChildren();
+  const hidden=live.hidden[id]||new Set();live.hidden[id]=hidden;
+  const valid=v=>typeof v==='number'&&Number.isFinite(v);
+  const numeric=v=>Number(v.toFixed(2)).toLocaleString('ru-RU');
+  function format(v,axis=false){
+    if(!valid(v))return 'Нет данных';
+    if(unit==='мс')return v>=60000?numeric(v/60000)+' мин':v>=1000?numeric(v/1000)+' с':numeric(v)+' мс';
+    if(unit==='%')return numeric(v)+'%';
+    return (axis&&v>=1000?numeric(v/1000)+' тыс.':numeric(v))+(axis?'':' '+unit);
+  }
+  const latest=points.at(-1);
+  const toggles=el('div',null,'chart-toggles');
+  for(const[key,color,label]of series){
+    const b=el('button',null,'chart-series');b.type='button';b.setAttribute('aria-pressed',String(!hidden.has(key)));b.style.setProperty('--series-color',color);
+    b.append(el('span',label,'chart-series-label'),el('strong',format(latest?.[key]),'chart-series-value'));
+    b.title='Последняя минута интервала · нажмите, чтобы скрыть или показать ряд';
+    b.onclick=()=>{hidden.has(key)?hidden.delete(key):hidden.add(key);drawChart(id,points,series,unit);};toggles.append(b);
+  }
+  box.append(toggles,el('div',latest?'Последняя минута · '+dateText(latest.time):'Нет наблюдений','chart-latest-time'));
+  const visible=series.filter(([k])=>!hidden.has(k));
+  const numbers=points.flatMap(p=>visible.map(([k])=>p[k])).filter(valid);
   if(!numbers.length){box.append(el('div',visible.length?'Нет наблюдений с положительной нагрузкой':'Выберите ряд на графике','empty'));return;}
-  const max=Math.max(...numbers,1),W=600,H=220,L=50,R=12,T=15,B=33,x=i=>L+i/Math.max(1,points.length-1)*(W-L-R),y=v=>H-B-v/max*(H-T-B);
-  const svg=svgNode('svg',{viewBox:`0 0 ${W} ${H}`,role:'group',tabindex:0,'aria-label':`${unit}. Стрелки: выбрать минуту. Enter: исследовать интервал.`});
-  for(let j=0;j<=3;j++){const value=max*j/3,yy=y(value);svg.append(svgNode('line',{x1:L,y1:yy,x2:W-R,y2:yy,class:'grid-line'}));const n=svgNode('text',{x:L-8,y:yy+4,'text-anchor':'end',class:'axis-label'});n.textContent=value>=1000?(value/1000).toFixed(1)+'k':Number(value.toFixed(1));svg.append(n);}
-  for(const[key,color]of visible){let path='',active=false;for(let i=0;i<points.length;i++){const v=points[i][key];if(v===null||!Number.isFinite(v)){active=false;continue;}path+=(active?'L':'M')+x(i).toFixed(2)+','+y(v).toFixed(2)+' ';active=true;}svg.append(svgNode('path',{d:path,fill:'none',stroke:color,'stroke-width':2.5,'stroke-linejoin':'round',class:'metric-path'}));}
-  for(const i of new Set([0,Math.floor((points.length-1)/2),points.length-1])){const n=svgNode('text',{x:x(i),y:H-9,'text-anchor':i===0?'start':i===points.length-1?'end':'middle',class:'axis-label'});n.textContent=points[i].time.slice(11,16);svg.append(n);}
-  const cross=svgNode('line',{x1:L,y1:T,x2:L,y2:H-B,class:'crosshair'});svg.append(cross);
-  const tip=el('div','Наведите для значений · нажмите для исследования ±2 минуты','chart-tooltip');let index=0;
-  function focus(i){index=Math.max(0,Math.min(points.length-1,i));const p=points[index];cross.setAttribute('x1',x(index));cross.setAttribute('x2',x(index));tip.textContent=dateText(p.time)+' · '+visible.map(([key,,label])=>`${label}: ${p[key]===null?'нет данных':Number(p[key]).toLocaleString('ru-RU')} ${unit}`).join(' · ');}
-  function select(){pauseLive();const t=Date.parse(points[index].time);setInputs(new Date(t-120000),new Date(t+180000));search(1,true);$('explorer').scrollIntoView({behavior:'smooth'});}
-  svg.addEventListener('pointermove',e=>{const r=svg.getBoundingClientRect();focus(Math.round(((e.clientX-r.left)/r.width*W-L)/(W-L-R)*(points.length-1)));});svg.addEventListener('click',select);svg.addEventListener('keydown',e=>{if(['ArrowLeft','ArrowRight','Enter'].includes(e.key)){e.preventDefault();if(e.key==='Enter')select();else focus(index+(e.key==='ArrowRight'?1:-1));}});box.append(svg,tip);
+  const peak=Math.max(...numbers,1);
+  const rawStep=peak/4,magnitude=10**Math.floor(Math.log10(rawStep));
+  const step=[1,2,2.5,5,10].find(n=>n*magnitude>=rawStep)*magnitude;
+  const max=step*4,W=640,H=320,L=96,R=22,T=18,B=44;
+  const x=i=>L+i/Math.max(1,points.length-1)*(W-L-R),y=v=>H-B-v/max*(H-T-B);
+  const stage=el('div',null,'chart-stage');
+  const svg=svgNode('svg',{viewBox:`0 0 ${W} ${H}`,role:'group',tabindex:0,'aria-label':`${unit}. Стрелки: выбрать минуту. Enter: исследовать. Мышью перетащите для выбора интервала.`});
+  const defs=svgNode('defs');svg.append(defs);
+  for(let j=0;j<=4;j++){
+    const value=step*j,yy=y(value);svg.append(svgNode('line',{x1:L,y1:yy,x2:W-R,y2:yy,class:'grid-line'}));
+    const n=svgNode('text',{x:L-10,y:yy+4,'text-anchor':'end',class:'axis-label'});n.textContent=format(value,true);svg.append(n);
+  }
+  visible.forEach(([key,color],row)=>{
+    const gradientId=id+'-fill-'+row,gradient=svgNode('linearGradient',{id:gradientId,x1:0,y1:0,x2:0,y2:1});
+    gradient.append(svgNode('stop',{offset:'0%','stop-color':color,'stop-opacity':'.25'}),svgNode('stop',{offset:'100%','stop-color':color,'stop-opacity':'.015'}));defs.append(gradient);
+    // Separate paths at missing samples; do not draw across missing observations.
+    let run=[];
+    function flush(){
+      if(!run.length)return;
+      const path=run.map(([i,v],j)=>(j?'L':'M')+x(i).toFixed(2)+','+y(v).toFixed(2)).join(' ');
+      svg.append(svgNode('path',{d:path+` L${x(run.at(-1)[0])},${H-B} L${x(run[0][0])},${H-B} Z`,fill:`url(#${gradientId})`,class:'chart-area'}));
+      svg.append(svgNode('path',{d:path,fill:'none',stroke:color,'stroke-width':2.5,'stroke-linecap':'round','stroke-linejoin':'round',class:'metric-path'}));
+      if(run.length===1)svg.append(svgNode('circle',{cx:x(run[0][0]),cy:y(run[0][1]),r:3,fill:color}));run=[];
+    }
+    points.forEach((p,i)=>{if(valid(p[key]))run.push([i,p[key]]);else flush();});flush();
+  });
+  for(const i of new Set([0,Math.round((points.length-1)/3),Math.round((points.length-1)*2/3),points.length-1])){
+    const n=svgNode('text',{x:x(i),y:H-12,'text-anchor':i===0?'start':i===points.length-1?'end':'middle',class:'axis-label'});n.textContent=points[i].time.slice(11,16);svg.append(n);
+  }
+  const selection=svgNode('rect',{x:L,y:T,width:0,height:H-B-T,class:'chart-selection'});svg.append(selection);
+  const cross=svgNode('line',{x1:L,y1:T,x2:L,y2:H-B,class:'crosshair',visibility:'hidden'});svg.append(cross);
+  const dots=visible.map(([,color])=>{const d=svgNode('circle',{r:4.5,fill:color,stroke:'var(--panel)','stroke-width':2,visibility:'hidden'});svg.append(d);return d;});
+  const tip=el('div',null,'chart-floating-tip');tip.hidden=true;
+  const hint=el('div','Наведите для значений · клик: ±2 мин · перетяните для выбора периода','chart-tooltip');
+  let index=points.length-1,dragStart=null,dragX=null,skipClick=false;
+  function focus(i){
+    index=Math.max(0,Math.min(points.length-1,i));const p=points[index];
+    cross.setAttribute('x1',x(index));cross.setAttribute('x2',x(index));cross.setAttribute('visibility','visible');
+    tip.replaceChildren(el('strong',dateText(p.time),'chart-tip-time'));
+    visible.forEach(([key,color,label],j)=>{
+      const row=el('div',null,'chart-tip-row'),name=el('span',label);name.style.color=color;row.append(name,el('strong',format(p[key])));tip.append(row);
+      dots[j].setAttribute('visibility',valid(p[key])?'visible':'hidden');
+      if(valid(p[key])){dots[j].setAttribute('cx',x(index));dots[j].setAttribute('cy',y(p[key]));}
+    });
+    tip.hidden=false;
+    const width=stage.clientWidth,pixel=x(index)/W*width;
+    tip.style.left=Math.max(0,Math.min(width-tip.offsetWidth,pixel>width/2?pixel-tip.offsetWidth-14:pixel+14))+'px';
+  }
+  function hide(){if(dragStart!==null)return;tip.hidden=true;cross.setAttribute('visibility','hidden');dots.forEach(d=>d.setAttribute('visibility','hidden'));}
+  function select(from=index,to=index,range=false){
+    pauseLive();const a=Date.parse(points[Math.min(from,to)].time),b=Date.parse(points[Math.max(from,to)].time);
+    setInputs(new Date(a-(range?0:120000)),new Date(b+(range?60000:180000)));
+    search(1,true);$('explorer').scrollIntoView({behavior:'smooth'});
+  }
+  function at(e){const r=svg.getBoundingClientRect();return Math.max(0,Math.min(points.length-1,Math.round(((e.clientX-r.left)/r.width*W-L)/(W-L-R)*(points.length-1))));}
+  svg.addEventListener('pointermove',e=>{focus(at(e));if(dragStart!==null){selection.setAttribute('x',x(Math.min(dragStart,index)));selection.setAttribute('width',Math.abs(x(dragStart)-x(index)));}});
+  svg.addEventListener('pointerleave',hide);
+  svg.addEventListener('pointerdown',e=>{if(e.button!==0||e.pointerType==='touch')return;skipClick=false;dragStart=at(e);dragX=e.clientX;svg.setPointerCapture(e.pointerId);});
+  svg.addEventListener('pointerup',e=>{if(dragStart===null)return;const from=dragStart,to=at(e),moved=Math.abs(e.clientX-dragX)>6;dragStart=null;selection.setAttribute('width',0);if(svg.hasPointerCapture(e.pointerId))svg.releasePointerCapture(e.pointerId);if(moved&&from!==to){skipClick=true;select(from,to,true);}});
+  svg.addEventListener('pointercancel',()=>{dragStart=null;selection.setAttribute('width',0);hide();});
+  svg.addEventListener('click',e=>{if(skipClick){skipClick=false;return;}focus(at(e));select();});
+  svg.addEventListener('keydown',e=>{if(['ArrowLeft','ArrowRight','Enter','Escape'].includes(e.key)){e.preventDefault();if(e.key==='Enter')select();else if(e.key==='Escape')hide();else focus(index+(e.key==='ArrowRight'?1:-1));}});
+  svg.addEventListener('blur',hide);
+  stage.append(svg,tip);box.append(stage,hint);
 }
 $('live-enabled').onchange=()=>{live.generation++;if($('live-enabled').checked)refreshLive();else pauseLive();scheduleLive();};$('live-interval').onchange=scheduleLive;$('refresh-now').onclick=refreshLive;
 for(const id of ['start','end','timezone','service','threshold','errors-only'])$(id).addEventListener('change',()=>{pauseLive();state.dashboardVersion++;state.dashboardController?.abort();live.alertVersion++;live.alertController?.abort();$('alerts-refresh').disabled=false;$('alerts-panel').setAttribute('aria-busy','false');state.listVersion++;state.listController?.abort();setBusy(false);$('live-status').textContent='Фильтры изменены — нажмите «Обновить обзор»';});
