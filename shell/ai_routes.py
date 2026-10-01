@@ -187,8 +187,16 @@ async def completion(profile, messages, test=False):
         usage = data.get("usage") or {}
         usage = {k: v for k, v in usage.items() if k in ("prompt_tokens", "completion_tokens", "total_tokens") and isinstance(v, int)}
         return text, usage
+    except httpx.ConnectTimeout:
+        raise HTTPException(504, "LLM: тайм-аут соединения (connect_timeout, 10 с). Проверьте доступ к адресу и порту с сервера iBatyr APM, маршрут, firewall и прослушивание порта сервером модели.")
+    except httpx.ReadTimeout:
+        raise HTTPException(504, "LLM: тайм-аут ожидания ответа (read_timeout, 100 с без данных). Проверьте очередь запросов, загрузку модели и GPU, а также журналы сервера LLM. Автоматический повтор не выполнялся.")
+    except httpx.WriteTimeout:
+        raise HTTPException(504, "LLM: тайм-аут передачи запроса (write_timeout). Проверьте сеть и доступность сервера LLM.")
+    except httpx.PoolTimeout:
+        raise HTTPException(504, "LLM: тайм-аут получения соединения (pool_timeout). Повторите проверку вручную после завершения текущих запросов.")
     except httpx.TimeoutException:
-        raise HTTPException(504, "LLM не ответила за отведённое время")
+        raise HTTPException(504, "LLM: сетевой тайм-аут (timeout). Выполните tools/diagnose_llm.py на сервере оболочки.")
     except httpx.HTTPError:
         raise HTTPException(502, "Не удалось подключиться к LLM. Проверьте адрес, сеть и TLS.")
     except (ValueError, KeyError, IndexError, TypeError):

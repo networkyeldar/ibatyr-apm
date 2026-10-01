@@ -38,6 +38,7 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--app-dir', required=True, type=Path)
     parser.add_argument('--port', type=int, default=8011)
+    parser.add_argument('--allow-missing-users', action='store_true', help='Only for legacy installations without users.sqlite3')
     args=parser.parse_args()
     app=args.app_dir.resolve()
     if os.geteuid()!=0:
@@ -70,6 +71,8 @@ def main():
         print('Резервная копия:',backup,flush=True)
         try:
             run('systemctl','stop','ibatyr-apm.service')
+            backup_args = ['--allow-missing-users'] if args.allow_missing_users else []
+            run('python3', Path(__file__).with_name('backup_state.py'), '--already-stopped', *backup_args)
             for name in FILES:
                 shutil.copy2(stage/name,app/name)
                 (app/name).chmod(0o644)

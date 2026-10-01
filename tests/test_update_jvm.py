@@ -9,7 +9,7 @@ spec=importlib.util.spec_from_file_location('update_jvm',Path(__file__).parents[
 updater=importlib.util.module_from_spec(spec);spec.loader.exec_module(updater)
 
 
-@pytest.mark.parametrize('fail',[False,True])
+@pytest.mark.parametrize('fail',[False,True,'backup'])
 def test_update_preserves_private_state_and_rolls_back(tmp_path,monkeypatch,fail):
     app=tmp_path/'app';source=tmp_path/'source'
     for root,content in [(app,'old'),(source,'v=5.0-users-1')]:
@@ -25,6 +25,10 @@ def test_update_preserves_private_state_and_rolls_back(tmp_path,monkeypatch,fail
     commands=[];checks=0
     def run(*args,**kwargs):
         commands.append(args)
+        if len(args)>1 and str(args[1]).endswith('/backup_state.py'):
+            assert (app/'ai_routes.py').read_text()=='old'
+            assert commands[-2]==('systemctl','stop','ibatyr-apm.service')
+            if fail=='backup':raise RuntimeError('backup failed')
         return SimpleNamespace(stdout=str(app))
     def ready(port):
         nonlocal checks
