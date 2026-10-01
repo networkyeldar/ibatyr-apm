@@ -7,8 +7,11 @@ function reportLink(id,data){const a=$(id);a.href='/api/ai/reports/'+encodeURICo
 function renderReport(data,target){
   const box=$(target),a=data.analysis;box.classList.remove('empty');box.hidden=false;
   const m=data.metadata||{},period=m.period;
-  box.replaceChildren(el('div',[m.service?.name,m.instance?.name,m.trace_id,period?dateText(period.start)+' → '+dateText(period.end_exclusive):null,data.model].filter(Boolean).join(' · '),'report-context'),el('p',a.summary,'analysis-summary'));
-  if(a.impact)box.append(el('h3','Влияние'),el('p',a.impact));
+  const heading=el('div',null,'analysis-result-heading');heading.append(el('span','ИИ','analysis-result-badge'),el('h3','Результат ИИ-анализа'));
+  box.replaceChildren(heading,el('div',[m.service?.name,m.instance?.name,m.trace_id,period?dateText(period.start)+' → '+dateText(period.end_exclusive):null,data.model].filter(Boolean).join(' · '),'report-context'),el('p',a.summary,'analysis-summary'));
+  function section(title,content,kind=''){const section=el('section',null,'analysis-section '+kind);section.append(el('h3',title),content);box.append(section);}
+  if(a.impact)section('Влияние',el('p',a.impact));
+  if(a.findings.length)box.append(el('h3','Наблюдения по измерениям','analysis-group-title'));
   for(const f of a.findings){
     const card=el('article',null,'finding');card.append(el('h3',f.title),el('p',f.interpretation));
     const refs=el('div',null,'evidence-links');
@@ -16,9 +19,9 @@ function renderReport(data,target){
       b.onclick=()=>{let details=card.querySelector('details');if(!details){details=el('details');details.append(el('summary','Исходные измерения'),el('pre',JSON.stringify((data.evidence||[]).filter(row=>f.evidence_ids.includes(row.id)),null,2)));card.append(details);}details.open=!details.open;};refs.append(b);
     }card.append(refs);box.append(card);
   }
-  for(const[key,title]of [['hypotheses','Гипотезы — требуют подтверждения'],['next_checks','Приоритетные проверки'],['limitations','Ограничения вывода']])if(a[key]?.length){const list=el('ol');for(const text of a[key])list.append(el('li',text));box.append(el('h3',title),list);}
-  if(a.conclusion)box.append(el('h3','Вывод'),el('p',a.conclusion));
-  const limits=el('details');limits.append(el('summary','Покрытие и ограничения исходных данных'));for(const text of data.limitations||[])limits.append(el('p',text,'small muted'));box.append(limits,el('p',data.notice,'small muted'));
+  for(const[key,title]of [['hypotheses','Гипотезы — требуют подтверждения'],['next_checks','Приоритетные проверки'],['limitations','Ограничения вывода']])if(a[key]?.length){const list=el('ol');for(const text of a[key])list.append(el('li',text));section(title,list);}
+  if(a.conclusion)section('Вывод',el('p',a.conclusion),'analysis-conclusion');
+  const limits=el('details',null,'analysis-source-notes');limits.append(el('summary','Покрытие и ограничения исходных данных'));for(const text of data.limitations||[])limits.append(el('p',text,'small muted'));box.append(limits,el('p',data.notice,'small muted'));
 }
 async function analyzeReport(kind){
   if(state.aiBusy)return;

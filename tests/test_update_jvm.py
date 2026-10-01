@@ -12,7 +12,7 @@ updater=importlib.util.module_from_spec(spec);spec.loader.exec_module(updater)
 @pytest.mark.parametrize('fail',[False,True])
 def test_update_preserves_private_state_and_rolls_back(tmp_path,monkeypatch,fail):
     app=tmp_path/'app';source=tmp_path/'source'
-    for root,content in [(app,'old'),(source,'v=5.0-analysis-2')]:
+    for root,content in [(app,'old'),(source,'v=5.0-blocks-1')]:
         (root/'ai_web').mkdir(parents=True)
         (root/'ai_web/index.html').write_text(content)
         if root==source:
@@ -33,7 +33,7 @@ def test_update_preserves_private_state_and_rolls_back(tmp_path,monkeypatch,fail
     class Response:
         def __enter__(self):return self
         def __exit__(self,*args):pass
-        def read(self):return b'v=5.0-analysis-2'
+        def read(self):return b'v=5.0-blocks-1'
     monkeypatch.setattr(updater,'SOURCE',source)
     monkeypatch.setattr(updater,'run',run)
     monkeypatch.setattr(updater,'ready',ready)
@@ -48,7 +48,7 @@ def test_update_preserves_private_state_and_rolls_back(tmp_path,monkeypatch,fail
         assert not (app/'report_fonts').exists()
     else:
         updater.main()
-        assert (app/'jvm_routes.py').read_text()=='v=5.0-analysis-2'
+        assert (app/'jvm_routes.py').read_text()=='v=5.0-blocks-1'
     assert (app/'settings.json').read_text()=='private settings'
     assert len(list(app.glob('update-backup-workspace-*')))==1
     assert ('systemctl','start','ibatyr-apm.service') in commands
