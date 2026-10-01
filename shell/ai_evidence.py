@@ -1,6 +1,7 @@
 import re
 import json
 import logging
+from datetime import datetime
 
 import sqlglot
 from sqlglot import exp
@@ -77,17 +78,32 @@ def build_evidence(detail, question):
         selected.append(span)
         if len(selected) >= 40:
             break
+    def stamp(span):
+        try: return datetime.fromisoformat(span.get('start', '')).timestamp()*1000
+        except (ValueError, TypeError): return None
+    stamps=[stamp(s) for s in spans if stamp(s) is not None]
+    origin=min(stamps) if stamps else None
     omitted_sql = 0
     for span in selected:
         sql = safe_sql(span.get("sql")) if span.get("is_database") else None
         if span.get("sql") and not sql:
             omitted_sql += 1
-        add({"kind": "database_operation" if span.get("is_database") else "operation", "service": services.get(span.get("service")), "duration_ms": span.get("duration_ms"), "is_error": span.get("has_error"), "error_codes": event_codes(span), "sql_template": sql}, {"segment_id": span["segment_id"], "span_id": span["span_id"], "operation": span.get("operation")})
+        add({"kind": "database_operation" if span.get("is_database") else "operation", "service": services.get(span.get("service")), "duration_ms": span.get("duration_ms"), "is_error": span.get("has_error"), "offset_ms": round(stamp(span)-origin) if origin is not None and stamp(span) is not None else None, "span_type": span.get("type"), "layer": span.get("layer"), "error_codes": event_codes(span), "sql_template": sql}, {"segment_id": span["segment_id"], "span_id": span["span_id"], "operation": span.get("operation")})
 
+    groups={}
+    for span in spans[:2000]:
+        if not span.get('is_database'):continue
+        template=safe_sql(span.get('sql'))
+        if not template:continue
+        group=groups.setdefault(template,{'calls':0,'errors':0,'max_ms':0,'sum_inclusive_ms':0})
+        value=max(0,span.get('duration_ms') or 0)
+        group['calls']+=1;group['errors']+=bool(span.get('has_error'));group['max_ms']=max(group['max_ms'],value);group['sum_inclusive_ms']+=value
+    for template,group in sorted(groups.items(),key=lambda x:x[1]['sum_inclusive_ms'],reverse=True)[:8]:
+        add({'kind':'sql_group','sql_template':template,**group,'note':'Inclusive times may overlap; sum is not wall time. Grouping covers at most first 2000 returned spans.'}, {'title':'Повторяющийся шаблон SQL','sql_template':template})
     packet = {
         "question": question,
         "scope": "one_stored_trace",
-        "coverage": {"total_returned_spans": len(spans), "selected_spans": len(selected), "sql_templates_omitted": omitted_sql, "has_http_entry": detail.get("has_http_entry_in_trace"), "trace_completeness": "unknown"},
+        "coverage": {"total_returned_spans": len(spans), "selected_spans": len(selected), "sql_grouping_scanned_spans": min(len(spans),2000), "sql_templates_omitted": omitted_sql, "has_http_entry": detail.get("has_http_entry_in_trace"), "trace_completeness": "unknown"},
         "limitations": ["Spans may be missing. Nested durations overlap; do not sum them.", "Uncovered time is not a measurement of CPU and does not identify its cause.", "An HTTP 200 entry can contain database errors.", "A client JDBC duration is not necessarily server SQL execution time."],
         "evidence": rows,
     }

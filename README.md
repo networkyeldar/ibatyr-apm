@@ -7,7 +7,7 @@
 сервера/Java-агента. Не требуется старый каталог `~/skywalking-ai/backend`.
 Перед клиентским production-развёртыванием пройдите [приёмку](docs/VALIDATION.md).
 
-[Релизы](https://github.com/networkyeldar/ibatyr-apm/releases) · [CI](https://github.com/networkyeldar/ibatyr-apm/actions) · [Быстрый старт](#быстрый-старт) · [Elasticsearch с нуля](docs/ELASTICSEARCH.md) · [Алерты и Live](docs/ALERTS.md) · [JVM](docs/JVM.md) · [Сервер](docs/SERVER.md) · [Агент](docs/AGENT.md) ·
+[Релизы](https://github.com/networkyeldar/ibatyr-apm/releases) · [CI](https://github.com/networkyeldar/ibatyr-apm/actions) · [Быстрый старт](#быстрый-старт) · [Elasticsearch с нуля](docs/ELASTICSEARCH.md) · [Алерты и Live](docs/ALERTS.md) · [JVM](docs/JVM.md) · [ИИ и PDF](docs/AI-REPORTS.md) · [Сервер](docs/SERVER.md) · [Агент](docs/AGENT.md) ·
 [Лицензирование](docs/LICENSING.md) · [Обслуживание](docs/OPERATIONS.md) ·
 [GitHub и релизы](docs/GITHUB.md) · [Результаты проверок](docs/VALIDATION.md)
 
@@ -19,7 +19,7 @@
 - Обзор трафика и задержек; переход от сегмента к SQL и ошибкам конкретного span.
 - Покрытие входящего HTTP-вызова дочерними spans с учётом пересечений.
 - Выбор внешнего или локального OpenAI-совместимого LLM с авторизацией.
-- Предпросмотр сокращённых данных перед отправкой модели; вывод со ссылками на evidence.
+- Подробный ИИ-анализ трассировки одним нажатием; общий анализ графиков с доказательствами и PDF-отчётом.
 - Вход по паролю, offline-лицензия trial/paid, экспорт выбранной трассировки.
 
 AI анализирует **одну выбранную трассировку**. Сохранённые traces — выборка,
@@ -110,7 +110,7 @@ sudo python3 install.py agent \
 ## Интерфейс
 
 Отдельный раздел **JVM**: CPU, Heap, GC, потоки и классы с выбором экземпляра,
-историческим периодом и Live. [Единицы, ограничения и обновление](docs/JVM.md).
+историческим периодом и Live. Графики умеют приближать доступные данные; пульсация отмечает свежую точку в Live. [Единицы, ограничения и обновление](docs/JVM.md).
 
 ![Демонстрационный дашборд iBatyr APM](docs/images/dashboard.png)
 

@@ -30,7 +30,12 @@ HTTP 200 не исключает ошибок вложенных операци�
 Не придумывай сервисы, SQL, блокирующие транзакции, индексы, параметры или длительности.
 Верни только JSON: {"summary":"...", "findings":[{"title":"...", "interpretation":"...", "evidence_ids":["E001"]}], "hypotheses":["..."], "next_checks":["..."]}.
 Каждому finding нужны существующие evidence_ids. Не выдавай гипотезы за установленную причину.
-При недостатке данных явно укажи ограничение. Максимум 6 findings и 6 пунктов в каждом списке.
+При недостатке данных явно укажи ограничение. До 10 findings и 10 пунктов в каждом списке. Дай подробный технический разбор: где и когда наблюдается задержка, её величина и доля, что известно и что неизвестно.
+Для трассировки сопоставь входной API, медленные SQL, повторяющиеся шаблоны, ошибки, временной порядок и непокрытые интервалы. Не утверждай N+1 только по числу SQL.
+Для dashboard_overview рассмотрите все доступные группы: задержка, трафик, ошибки, CPU, память, GC, потоки, классы и выборку алертов. Не делай вывода о SQL без spans. Укажи совпадения по времени с evidence_ids, отделив их от причинности.
+Каждый finding: title, interpretation (измерения, смысл и ограничения), evidence_ids. Используй числа и единицы из evidence, без выдуманных порогов SLA.
+В next_checks укажи приоритет P1/P2/P3, конкретную проверку, какие данные нужны и какой результат подтвердит или опровергнет гипотезу. Не советуй перезапуск/удаление/изменение production как доказанную необходимость.
+Дополнительно верни impact (строка: влияние и границы вывода), limitations (список строк), conclusion (строка: подтверждённое, вероятное и неизвестное). Не заполняй объём общими советами; учитывай лимит выходных токенов.
 """
 
 
@@ -154,18 +159,21 @@ def parse_analysis(text, allowed):
         if len(data["summary"]) > 5000:
             raise ValueError()
         for key in ("findings", "hypotheses", "next_checks"):
-            if not isinstance(data.get(key), list) or len(data[key]) > 6:
+            if not isinstance(data.get(key), list) or len(data[key]) > 10:
                 raise ValueError()
         for item in data["findings"]:
             if not isinstance(item, dict) or not all(isinstance(item.get(k), str) and len(item[k]) <= 5000 for k in ("title", "interpretation")):
                 raise ValueError()
             ids = item.get("evidence_ids")
-            if not isinstance(ids, list) or not ids or not all(isinstance(i, str) and i in allowed for i in ids):
+            if not isinstance(ids, list) or not 1 <= len(ids) <= 20 or not all(isinstance(i, str) and i in allowed for i in ids):
                 raise ValueError()
         for key in ("hypotheses", "next_checks"):
             if not all(isinstance(i, str) and len(i) <= 5000 for i in data[key]):
                 raise ValueError()
-        return {k: data[k] for k in ("summary", "findings", "hypotheses", "next_checks")}
+        for key in ('impact','conclusion'):
+            if key in data and (not isinstance(data[key],str) or len(data[key])>5000):raise ValueError()
+        if 'limitations' in data and (not isinstance(data['limitations'],list) or len(data['limitations'])>12 or not all(isinstance(v,str) and len(v)<=3000 for v in data['limitations'])):raise ValueError()
+        return {k: data[k] for k in ("summary", "findings", "hypotheses", "next_checks", "impact", "limitations", "conclusion") if k in data}
     except (ValueError, TypeError, KeyError):
         raise HTTPException(502, "LLM не вернула корректный JSON с существующими ссылками на evidence. Непроверенный ответ не отображается.")
 
@@ -258,3 +266,7 @@ def register_ai_features(app, query_oap, config_path=None):
             return {"provider": snapshot["provider"], "model": p["model"], "elapsed_seconds": round(time.monotonic()-started, 2), "usage": usage, "analysis": analysis, "evidence_links": snapshot["links"], "notice": "Интерпретация модели требует проверки. Ссылки проверены на наличие в контексте, но это не гарантирует правильность вывода."}
         finally:
             active.discard(body.snapshot_id)
+
+    from analysis_reports import register_reports
+    register_reports(app, trace_endpoint, licensing, profile,
+                     lambda p, m: completion(p, m), parse_analysis, SYSTEM_PROMPT, active)

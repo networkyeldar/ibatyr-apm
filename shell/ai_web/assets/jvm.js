@@ -2,7 +2,7 @@
 const jvm = {version:0, controller:null, service:null, instance:null, data:null};
 function cancelJVM(){jvm.version++;jvm.controller?.abort();$('jvm-view').setAttribute('aria-busy','false');}
 function clearJVM(){
-  jvm.data=null;$('jvm-stats').replaceChildren();
+  jvm.data=null;for(const id of ['cpu','memory','nonheap','threads','blocked','gc-time','gc-count','classes'])delete live.charts['jvm-'+id];$('jvm-stats').replaceChildren();
   for(const id of ['cpu','memory','nonheap','threads','blocked','gc-time','gc-count','classes'])$('jvm-'+id).replaceChildren();
   $('jvm-warnings').replaceChildren();$('jvm-investigate').disabled=true;
 }

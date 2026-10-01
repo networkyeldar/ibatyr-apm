@@ -4,3 +4,4 @@ httpx==0.28.1
 pydantic==2.13.5
 cryptography==50.0.1
 sqlglot==30.20.0
+reportlab==4.4.9

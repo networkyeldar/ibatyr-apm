@@ -29,7 +29,12 @@ def fixture(route):
     elif p.endswith('/license'):data={'status':'active','ai_enabled':True,'days_remaining':30,'message':'Тестовая лицензия','installation_id':'fixture'}
     elif p.endswith('/license/history'):data={'events':[]}
     elif p.endswith('/services'):data={'services':[{'id':'demo','name':'Synergy Demo'}]}
-    elif p.endswith('/llm/providers'):data={'providers':[]}
+    elif p.endswith('/llm/providers'):data={'providers':[{'id':'external','configured':True,'model':'fixture-model'},{'id':'local','configured':True,'model':'fixture-local'}]}
+    elif p.endswith('/trace-analysis') or p.endswith('/overview-analysis'):
+        body=route.request.post_data_json;queries[p]=body
+        data={'report_id':'fixture-report','provider':body['provider'],'model':'fixture-model','elapsed_seconds':1.2,'usage':{'total_tokens':500},'analysis':{'summary':'Подробный анализ выбранного периода.','impact':'Деградация требует проверки.','findings':[{'title':'Пик задержки','interpretation':'Измеренная задержка выросла.','evidence_ids':['E001']}],'hypotheses':['Совпадение не доказывает причину.'],'next_checks':['P1: проверить thread dump.'],'limitations':['Выборка'],'conclusion':'Причина не доказана.'},'evidence_links':{'E001':{'title':'Метрика задержки'}},'evidence':[{'id':'E001','max':1500}],'limitations':['Тестовые данные'],'metadata':{'scope':'overview','service':{'name':'Synergy Demo'},'period':{'start':body.get('start',start),'end_exclusive':body.get('end',end)}},'notice':'Synthetic report.'}
+    elif p.endswith('.pdf'):
+        route.fulfill(body=b'%PDF-1.4 synthetic download fixture',content_type='application/pdf',headers={'Content-Disposition':'attachment; filename="report.pdf"'});return
     elif p.endswith('/jvm'):
         instance={'id':q.get('instance_id','jvm1'),'name':'JVM demo '+q.get('instance_id','jvm1')}
         points=[{'time':(base+timedelta(minutes=i)).isoformat(),'cpu_percent':20+8*math.sin(i*.2),'heap_gib':19+math.sin(i*.1),'heap_max_gib':30,'heap_percent':64,'nonheap_gib':.7,'metaspace_gib':.3,'threads_live':2800+30*math.sin(i*.2),'threads_blocked':68+10*math.sin(i*.1),'threads_runnable':120,'threads_waiting':400,'threads_timed_waiting':2200,'young_gc_ms':1200+400*math.sin(i*.3),'old_gc_ms':0,'normal_gc_ms':0,'young_gc_count':5,'old_gc_count':0,'normal_gc_count':0,'classes_loaded':45000} for i in range(minute_count)]
@@ -86,8 +91,21 @@ try:
         assert page.locator('#monitor-view').is_visible()
         assert not page.locator('#live-enabled').is_checked()
         page.locator('#records .operation').first.click();page.locator('#detail pre').wait_for();before=page.locator('#detail').inner_text()
+        with page.expect_response('**/api/ai/llm/trace-analysis'):
+            page.locator('#ai-prepare').click()
+        page.locator('#trace-pdf').wait_for(state='visible')
+        assert counts.get('/api/ai/llm/preview',0)==0
+        assert not page.locator('#preview-dialog').is_visible()
+        assert 'P1:' in page.locator('#ai-result').inner_text()
+        assert page.locator('#ai-result .finding').count()==1
+        with page.expect_download() as download_info:
+            page.locator('#trace-pdf').click()
+        assert download_info.value.suggested_filename.endswith('.pdf')
+
         page.locator('#live-enabled').check();page.wait_for_function('!live.busy');assert page.locator('#detail').inner_text()==before
+        assert page.locator('.live-point').count()>0
         page.locator('#live-enabled').uncheck()
+        assert page.locator('.live-point').count()==0
         # Rolling 24h triggers both metrics and trace requests with a 24h window.
         alerts_before=counts.get('/api/ai/alerts',0)
         with page.expect_response('**/api/ai/dashboard?*'):
@@ -176,6 +194,16 @@ try:
         direct.wait_for_function('!state.busy')
         q=queries['/api/ai/jvm']
         assert (datetime.fromisoformat(q['end'])-datetime.fromisoformat(q['start'])).total_seconds()==86400
+        with direct.expect_response('**/api/ai/llm/overview-analysis'):
+            direct.locator('#overview-analyze').click()
+        direct.locator('#overview-pdf').wait_for(state='visible')
+        body=queries['/api/ai/llm/overview-analysis']
+        assert body['instance_id']=='jvm2'
+        assert (datetime.fromisoformat(body['end'])-datetime.fromisoformat(body['start'])).total_seconds()==86400
+        assert 'Synergy Demo' in direct.locator('#overview-ai-result .report-context').inner_text()
+        direct.locator('#overview-ai-result .evidence-links button').first.click()
+        assert direct.locator('#overview-ai-result details[open] pre').is_visible()
+        ai_count=counts['/api/ai/llm/overview-analysis']
         direct.locator('#jvm-cpu svg').focus();direct.keyboard.press('ArrowLeft')
         assert direct.locator('#jvm-cpu .chart-floating-tip').is_visible()
         with direct.expect_response('**/api/ai/jvm?*'):
@@ -189,6 +217,15 @@ try:
         direct.wait_for_function('!live.busy')
         assert queries['/api/ai/jvm']['instance_id']=='jvm2'
         direct.locator('#live-enabled').uncheck()
+        assert counts['/api/ai/llm/overview-analysis']==ai_count
+        # Leading gaps are trimmed explicitly; full-period mode keeps and shades them.
+        direct.evaluate("""() => { const pts=Array.from({length:1440},(_,i)=>({time:new Date(Date.UTC(2026,8,30,0,i)).toISOString(),cpu_percent:i<1000?null:20+i%5}));drawChart('jvm-cpu',pts,[['cpu_percent','#48bfae','CPU']],'%'); }""")
+        assert '440/1440' in direct.locator('#jvm-cpu .chart-coverage').inner_text()
+        assert '16:40' in direct.locator('#jvm-cpu svg').text_content()
+        direct.locator('#chart-window').select_option('full')
+        assert '00:00' in direct.locator('#jvm-cpu svg').text_content()
+        assert 'Нет наблюдений' in direct.locator('#jvm-cpu svg').text_content()
+        direct.locator('#chart-window').select_option('data')
         for width in [1500,800,390]:
             direct.set_viewport_size({'width':width,'height':1100})
             assert direct.evaluate('document.documentElement.scrollWidth <= innerWidth'),f'JVM overflow {width}'

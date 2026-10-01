@@ -26,3 +26,5 @@ cryptography, cffi и транзитивные зависимости.
 
 Коммерческая лицензия относится к AI-анализу оболочки. Она не отменяет права
 на оригинальные Apache-компоненты и отдельно лицензированные зависимости.
+
+PDF: ReportLab 4.4.9 (BSD). Bundled DejaVu Sans font subsets: see shell/report_fonts/LICENSE.txt.

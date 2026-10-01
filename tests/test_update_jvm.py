@@ -5,16 +5,19 @@ import sys
 
 import pytest
 
-spec=importlib.util.spec_from_file_location('update_jvm',Path(__file__).parents[1]/'tools/update_jvm.py')
+spec=importlib.util.spec_from_file_location('update_jvm',Path(__file__).parents[1]/'tools/update_workspace.py')
 updater=importlib.util.module_from_spec(spec);spec.loader.exec_module(updater)
 
 
 @pytest.mark.parametrize('fail',[False,True])
 def test_update_preserves_private_state_and_rolls_back(tmp_path,monkeypatch,fail):
     app=tmp_path/'app';source=tmp_path/'source'
-    for root,content in [(app,'old'),(source,'v=5.0-jvm-1')]:
+    for root,content in [(app,'old'),(source,'v=5.0-analysis-1')]:
         (root/'ai_web').mkdir(parents=True)
         (root/'ai_web/index.html').write_text(content)
+        if root==source:
+            (root/'report_fonts').mkdir()
+            (root/'report_fonts/font.ttf').write_text('fixture')
         for name in updater.FILES:
             if root==app and name=='jvm_routes.py':continue
             (root/name).write_text(content)
@@ -30,7 +33,7 @@ def test_update_preserves_private_state_and_rolls_back(tmp_path,monkeypatch,fail
     class Response:
         def __enter__(self):return self
         def __exit__(self,*args):pass
-        def read(self):return b'v=5.0-jvm-1'
+        def read(self):return b'v=5.0-analysis-1'
     monkeypatch.setattr(updater,'SOURCE',source)
     monkeypatch.setattr(updater,'run',run)
     monkeypatch.setattr(updater,'ready',ready)
@@ -42,10 +45,11 @@ def test_update_preserves_private_state_and_rolls_back(tmp_path,monkeypatch,fail
         assert (app/'ai_web/index.html').read_text()=='old'
         assert (app/'ai_routes.py').read_text()=='old'
         assert not (app/'jvm_routes.py').exists()
+        assert not (app/'report_fonts').exists()
     else:
         updater.main()
-        assert (app/'jvm_routes.py').read_text()=='v=5.0-jvm-1'
+        assert (app/'jvm_routes.py').read_text()=='v=5.0-analysis-1'
     assert (app/'settings.json').read_text()=='private settings'
-    assert len(list(app.glob('update-backup-jvm-*')))==1
+    assert len(list(app.glob('update-backup-workspace-*')))==1
     assert ('systemctl','start','ibatyr-apm.service') in commands
     assert all('skywalking.service' not in cmd for cmd in commands)

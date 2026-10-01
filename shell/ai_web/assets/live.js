@@ -1,7 +1,7 @@
 "use strict";
-const live = {timer:null, busy:false, generation:0, alertVersion:0, alertController:null, alertPage:1, alerts:null, lastSuccess:null, failures:0, lastServices:0, hidden:{}};
-function pauseLive(){ $('live-enabled').checked=false;clearTimeout(live.timer);live.generation++;$('live-label').textContent='Исторический просмотр';$('live-dot').classList.remove('on'); }
-function resetLive(){resetJVM();pauseLive();live.alertVersion++;live.alertController?.abort();$('alerts-refresh').disabled=false;$('alerts-panel').setAttribute('aria-busy','false');live.alerts=null;live.lastSuccess=null;$('alert-dialog').close();$('alert-detail').replaceChildren();$('alert-list').replaceChildren();$('alert-count').textContent='—';$('alert-status').textContent='Ожидаем данные OAP.';}
+const live = {timer:null, busy:false, generation:0, alertVersion:0, alertController:null, alertPage:1, alerts:null, lastSuccess:null, failures:0, lastServices:0, hidden:{}, charts:{}};
+function pauseLive(){ document.querySelectorAll('.live-point').forEach(n=>n.remove());$('live-enabled').checked=false;clearTimeout(live.timer);live.generation++;$('live-label').textContent='Исторический просмотр';$('live-dot').classList.remove('on'); }
+function resetLive(){resetReports();live.charts={};resetJVM();pauseLive();live.alertVersion++;live.alertController?.abort();$('alerts-refresh').disabled=false;$('alerts-panel').setAttribute('aria-busy','false');live.alerts=null;live.lastSuccess=null;$('alert-dialog').close();$('alert-detail').replaceChildren();$('alert-list').replaceChildren();$('alert-count').textContent='—';$('alert-status').textContent='Ожидаем данные OAP.';}
 function scheduleLive(){clearTimeout(live.timer);const enabled=$('live-enabled').checked;$('live-label').textContent=enabled?'LIVE · последний час':'Исторический просмотр';$('live-dot').classList.toggle('on',enabled&&!document.hidden);if(enabled&&state.csrf&&!document.hidden)live.timer=setTimeout(refreshLive,Number($('live-interval').value)*1000*Math.min(4,1+live.failures));}
 function setInputs(start,end){const value=$('timezone').value;const sign=value[0]==='-'?-1:1;const [h,m]=value.slice(1).split(':').map(Number);const offset=sign*(h*60+m)*60000;for(const[id,date]of [['start',start],['end',end]])$(id).value=new Date(date.getTime()+offset).toISOString().slice(0,16);}
 function readAlertPeriod(){return readPeriod();}
@@ -24,7 +24,7 @@ async function refreshLive(){
     if(result.some(r=>r.status==='rejected'||r.value!==true))throw new Error('Часть данных недоступна. Сохранён предыдущий результат.');
     live.lastSuccess=new Date();live.failures=0;
     $('live-status').textContent='Обновлено '+live.lastSuccess.toLocaleTimeString('ru-RU')+(state.selected?' · трассировка закреплена':'');
-  }catch(e){if(generation===live.generation){live.failures++;$('live-status').textContent='Нет свежих данных · '+(live.lastSuccess?'последнее обновление '+live.lastSuccess.toLocaleTimeString('ru-RU'):'обновление не подтверждено')+' · '+e.message;}}
+  }catch(e){if(generation===live.generation){document.querySelectorAll('.live-point').forEach(n=>n.remove());live.failures++;$('live-status').textContent='Нет свежих данных · '+(live.lastSuccess?'последнее обновление '+live.lastSuccess.toLocaleTimeString('ru-RU'):'обновление не подтверждено')+' · '+e.message;}}
   finally{live.busy=false;scheduleLive();}
 }
 async function loadAlerts(query,page=1){
@@ -56,7 +56,15 @@ function openAlarm(a){
   $('alert-dialog').showModal();
 }
 function drawChart(id,points,series,unit){
+  live.charts[id]={points,series,unit};
   const box=$(id);box.replaceChildren();
+  const requested=points,usable=p=>series.some(([k])=>typeof p[k]==='number'&&Number.isFinite(p[k]));
+  const first=points.findIndex(usable),last=points.findLastIndex(usable);
+  const fit=$('chart-window')?.value!=='full';
+  if(fit&&first>=0)points=points.slice(first,last+1);
+  const missing=requested.filter(p=>!usable(p)).length;
+  if(missing){box.append(el('div',`Покрытие: ${requested.length-missing}/${requested.length} мин · `+(fit&&first>=0?`показаны данные ${dateText(points[0].time)} → ${dateText(points.at(-1).time)}`:'полный период, пропуски не интерполируются'),'chart-coverage'));}
+
   const hidden=live.hidden[id]||new Set();live.hidden[id]=hidden;
   const valid=v=>typeof v==='number'&&Number.isFinite(v);
   const numeric=v=>Number(v.toFixed(2)).toLocaleString('ru-RU');
@@ -66,13 +74,13 @@ function drawChart(id,points,series,unit){
     if(unit==='%')return numeric(v)+'%';
     return (axis&&v>=1000?numeric(v/1000)+' тыс.':numeric(v))+(axis?'':' '+unit);
   }
-  const latest=points.at(-1);
+  const latest=requested.at(-1);
   const toggles=el('div',null,'chart-toggles');
   for(const[key,color,label]of series){
     const b=el('button',null,'chart-series');b.type='button';b.setAttribute('aria-pressed',String(!hidden.has(key)));b.style.setProperty('--series-color',color);
     b.append(el('span',label,'chart-series-label'),el('strong',format(latest?.[key]),'chart-series-value'));
     b.title='Последняя минута интервала · нажмите, чтобы скрыть или показать ряд';
-    b.onclick=()=>{hidden.has(key)?hidden.delete(key):hidden.add(key);drawChart(id,points,series,unit);};toggles.append(b);
+    b.onclick=()=>{hidden.has(key)?hidden.delete(key):hidden.add(key);drawChart(id,requested,series,unit);};toggles.append(b);
   }
   box.append(toggles,el('div',latest?'Последняя минута · '+dateText(latest.time):'Нет наблюдений','chart-latest-time'));
   const visible=series.filter(([k])=>!hidden.has(k));
@@ -81,7 +89,7 @@ function drawChart(id,points,series,unit){
   const peak=Math.max(...numbers,1);
   const rawStep=peak/4,magnitude=10**Math.floor(Math.log10(rawStep));
   const step=[1,2,2.5,5,10].find(n=>n*magnitude>=rawStep)*magnitude;
-  const max=step*4,W=640,H=320,L=96,R=22,T=18,B=44;
+  const max=step*4,W=640,H=300,L=82,R=24,T=20,B=56;
   const x=i=>L+i/Math.max(1,points.length-1)*(W-L-R),y=v=>H-B-v/max*(H-T-B);
   const stage=el('div',null,'chart-stage');
   const svg=svgNode('svg',{viewBox:`0 0 ${W} ${H}`,role:'group',tabindex:0,'aria-label':`${unit}. Стрелки: выбрать минуту. Enter: исследовать. Мышью перетащите для выбора интервала.`});
@@ -105,8 +113,12 @@ function drawChart(id,points,series,unit){
     points.forEach((p,i)=>{if(valid(p[key]))run.push([i,p[key]]);else flush();});flush();
   });
   for(const i of new Set([0,Math.round((points.length-1)/3),Math.round((points.length-1)*2/3),points.length-1])){
-    const n=svgNode('text',{x:x(i),y:H-12,'text-anchor':i===0?'start':i===points.length-1?'end':'middle',class:'axis-label'});n.textContent=points[i].time.slice(11,16);svg.append(n);
+    const n=svgNode('text',{x:x(i),y:H-12,'text-anchor':i===0?'start':i===points.length-1?'end':'middle',class:'axis-label'});const stamp=points[i].time;const across=points[0].time.slice(0,10)!==points.at(-1).time.slice(0,10);n.textContent=(across?stamp.slice(8,10)+'.'+stamp.slice(5,7)+' ':'')+stamp.slice(11,16);svg.append(n);
   }
+  // Explicit shading for missing runs in full-period mode. Never fabricate observations.
+  if(!fit&&missing){let begin=null;for(let i=0;i<=points.length;i++){const absent=i<points.length&&!usable(points[i]);if(absent&&begin===null)begin=i;if(!absent&&begin!==null){const end=i-1;svg.append(svgNode('rect',{x:x(begin),y:T,width:Math.max(2,x(end)-x(begin)),height:H-B-T,fill:'var(--muted)',opacity:.07}));if(x(end)-x(begin)>100){const label=svgNode('text',{x:(x(begin)+x(end))/2,y:(H-B+T)/2,'text-anchor':'middle',class:'axis-label'});label.textContent='Нет наблюдений';svg.append(label);}begin=null;}}}
+  const fresh=Date.now()-Date.parse(points.at(-1).time);
+  if($('live-enabled').checked&&fresh>=0&&fresh<300000){for(const[key,color]of visible){const value=points.at(-1)[key];if(valid(value)){svg.append(svgNode('circle',{cx:x(points.length-1),cy:y(value),r:5,fill:color,class:'live-point'}));}}}
   const selection=svgNode('rect',{x:L,y:T,width:0,height:H-B-T,class:'chart-selection'});svg.append(selection);
   const cross=svgNode('line',{x1:L,y1:T,x2:L,y2:H-B,class:'crosshair',visibility:'hidden'});svg.append(cross);
   const dots=visible.map(([,color])=>{const d=svgNode('circle',{r:4.5,fill:color,stroke:'var(--panel)','stroke-width':2,visibility:'hidden'});svg.append(d);return d;});
@@ -143,12 +155,13 @@ function drawChart(id,points,series,unit){
   svg.addEventListener('blur',hide);
   stage.append(svg,tip);box.append(stage,hint);
 }
+$('chart-window').onchange=()=>{for(const[id,c]of Object.entries(live.charts))if($(id))drawChart(id,c.points,c.series,c.unit);};
 $('live-enabled').onchange=()=>{live.generation++;if($('live-enabled').checked)refreshLive();else pauseLive();scheduleLive();};$('live-interval').onchange=scheduleLive;$('refresh-now').onclick=refreshLive;
 for(const id of ['start','end','timezone','service','threshold','errors-only'])$(id).addEventListener('change',()=>{pauseLive();cancelJVM();state.dashboardVersion++;state.dashboardController?.abort();live.alertVersion++;live.alertController?.abort();$('alerts-refresh').disabled=false;$('alerts-panel').setAttribute('aria-busy','false');state.listVersion++;state.listController?.abort();setBusy(false);$('live-status').textContent='Фильтры изменены — нажмите «'+(state.view==='alerts'?'Обновить алерты':state.view==='jvm'?'Обновить JVM':'Обновить обзор')+'»';});
 $('alerts-refresh').onclick=refreshAlerts;
 $('alert-severity').onchange=refreshAlerts;
 $('alert-prev').onclick=()=>{pauseLive();loadAlerts(live.alerts?.period?{start:live.alerts.period.start,end:live.alerts.period.end_exclusive}:readAlertPeriod(),live.alertPage-1);};$('alert-next').onclick=()=>{pauseLive();loadAlerts(live.alerts?.period?{start:live.alerts.period.start,end:live.alerts.period.end_exclusive}:readAlertPeriod(),live.alertPage+1);};$('alert-close').onclick=()=>$('alert-dialog').close();
-document.addEventListener('visibilitychange',()=>{if(document.hidden){clearTimeout(live.timer);$('live-dot').classList.remove('on');$('live-status').textContent='Автообновление приостановлено: вкладка скрыта';}else if($('live-enabled').checked)refreshLive();});
+document.addEventListener('visibilitychange',()=>{if(document.hidden){document.querySelectorAll('.live-point').forEach(n=>n.remove());clearTimeout(live.timer);$('live-dot').classList.remove('on');$('live-status').textContent='Автообновление приостановлено: вкладка скрыта';}else if($('live-enabled').checked)refreshLive();});
 
 function cancelViewRequests(){
   cancelJVM();
@@ -159,7 +172,7 @@ function cancelViewRequests(){
 function showView(hash=location.hash,load=true){
   const next=hash==='#alerts-panel'?'alerts':hash==='#jvm'?'jvm':'monitor',changed=state.view!==next;
   if(changed)cancelViewRequests();state.view=next;
-  const alerts=next==='alerts',isJvm=next==='jvm';$('alerts-panel').hidden=!alerts;$('monitor-view').hidden=alerts||isJvm;$('jvm-view').hidden=!isJvm;
+  const alerts=next==='alerts',isJvm=next==='jvm';$('alerts-panel').hidden=!alerts;$('monitor-view').hidden=alerts||isJvm;$('jvm-view').hidden=!isJvm;$('reports-panel').hidden=alerts;
   document.querySelectorAll('[data-monitor-filter]').forEach(n=>{n.hidden=alerts||(isJvm&&!n.contains($('service')));});$('service').required=!alerts;$('threshold').required=!alerts&&!isJvm;
   $('page-title').textContent=alerts?'Алерты мониторинга':isJvm?'Нагрузка и здоровье JVM':'Производительность под контролем';
   $('page-description').textContent=alerts?'Срабатывания по всем сервисам. Выберите период и уровень критичности.':isJvm?'Наблюдайте за экземплярами Java. Выделяйте периоды нагрузки.':'Находите медленные вызовы. Проверяйте SQL. Объясняйте задержки.';

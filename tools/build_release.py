@@ -19,7 +19,10 @@ for component in ['shell','server','agent']:
         copy('tools/artifacts.py',root/'tools/artifacts.py')
         copy('tools/doctor.py',root/'tools/doctor.py')
         copy('tools/elastic_install.py',root/'tools/elastic_install.py')
-        if component=='shell':copy('shell',root/'shell')
+        if component=='shell':
+            copy('shell',root/'shell')
+            copy('tools/update_workspace.py',root/'tools/update_workspace.py')
+            copy('tools/update_jvm.py',root/'tools/update_jvm.py')
         elif a.with_vendor:
             archive=acquire(component);(root/'vendor').mkdir();shutil.copy2(archive,root/'vendor'/archive.name)
         with tarfile.open(path,'w:gz') as tar:tar.add(root,arcname=root.name)
