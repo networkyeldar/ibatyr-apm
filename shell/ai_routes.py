@@ -29,6 +29,7 @@ SYSTEM_PROMPT = """Ты помощник диагностики iBatyr APM. От
 HTTP 200 не исключает ошибок вложенных операций. Не суммируй пересекающиеся spans.
 Не придумывай сервисы, SQL, блокирующие транзакции, индексы, параметры или длительности.
 Верни только JSON: {"summary":"...", "findings":[{"title":"...", "interpretation":"...", "evidence_ids":["E001"]}], "hypotheses":["..."], "next_checks":["..."]}.
+hypotheses, next_checks и limitations — списки строк, не объектов. evidence_ids — список строк с точными id из evidence (например E001, без изменения формата). Каждый текстовый элемент до 5000 символов, limitations до 3000 символов на пункт.
 Каждому finding нужны существующие evidence_ids. Не выдавай гипотезы за установленную причину.
 При недостатке данных явно укажи ограничение. До 10 findings и 10 пунктов в каждом списке. Дай подробный технический разбор: где и когда наблюдается задержка, её величина и доля, что известно и что неизвестно.
 Для трассировки сопоставь входной API, медленные SQL, повторяющиеся шаблоны, ошибки, временной порядок и непокрытые интервалы. Не утверждай N+1 только по числу SQL.
@@ -46,6 +47,7 @@ class ProviderInput(BaseModel):
     clear_key: bool = False
     auth_mode: Literal["bearer", "none"] = "bearer"
     token_parameter: Literal["max_tokens", "max_completion_tokens"] = "max_tokens"
+    response_format: Literal["auto", "json_schema", "json_object", "prompt"] = "auto"
     max_tokens: int = Field(default=2048, ge=256, le=8192)
 
 
@@ -75,7 +77,7 @@ def validate_provider(name, values, old):
         raise HTTPException(422, "Для внешнего API требуется HTTPS")
     if url.hostname in ("169.254.169.254", "metadata.google.internal"):
         raise HTTPException(422, "Этот адрес запрещён")
-    result.update(base_url=base, model=values.model.strip(), auth_mode=values.auth_mode, token_parameter=values.token_parameter, max_tokens=values.max_tokens)
+    result.update(base_url=base, model=values.model.strip(), auth_mode=values.auth_mode, token_parameter=values.token_parameter, max_tokens=values.max_tokens, response_format=values.response_format)
     if not result["model"]:
         raise HTTPException(422, "Укажите имя модели")
     # Do not silently send the previous provider's key to a new server/path.
@@ -102,12 +104,55 @@ def fingerprint(profile):
     return hashlib.sha256(json.dumps(profile, sort_keys=True).encode()).hexdigest()
 
 
+def analysis_response_format(profile, messages):
+    """Constrain output to this request's evidence, without guessing gateway capabilities."""
+    mode = profile.get("response_format", "auto")
+    if mode == "auto":
+        supported = {"gpt-4o-mini", "gpt-4o-mini-2024-07-18", "gpt-4o",
+                     "gpt-4o-2024-08-06", "gpt-4o-2024-11-20"}
+        official = profile["base_url"].rstrip("/") == "https://api.openai.com/v1"
+        mode = "json_schema" if official and profile["model"] in supported else "prompt"
+    if mode == "prompt":
+        return None
+    if mode == "json_object":
+        return {"type": "json_object"}
+    try:
+        packet = json.loads(messages[-1]["content"])
+        ids = sorted({row["id"] for row in packet["evidence"]
+                      if isinstance(row.get("id"), str) and re.fullmatch(r"E[0-9]{3,}", row["id"])})
+    except (ValueError, TypeError, KeyError, IndexError, AttributeError):
+        raise HTTPException(422, "Не удалось подготовить ссылки на измерения для ИИ.")
+    if not ids:
+        raise HTTPException(422, "Нет измерений для анализа. Выберите период или трассировку с данными.")
+
+    def obj(properties):
+        return {"type": "object", "properties": properties,
+                "required": list(properties), "additionalProperties": False}
+
+    def strings(limit):
+        return {"type": "array", "items": {"type": "string"}, "maxItems": limit}
+
+    finding = obj({"title": {"type": "string"}, "interpretation": {"type": "string"},
+                   "evidence_ids": {"type": "array", "items": {"type": "string", "enum": ids},
+                                    "minItems": 1, "maxItems": 20}})
+    schema = obj({"summary": {"type": "string"}, "impact": {"type": "string"},
+                  "findings": {"type": "array", "items": finding, "maxItems": 10},
+                  "hypotheses": strings(10), "next_checks": strings(10),
+                  "limitations": strings(12), "conclusion": {"type": "string"}})
+    return {"type": "json_schema", "json_schema": {
+        "name": "ibatyr_apm_analysis", "strict": True, "schema": schema}}
+
+
 async def completion(profile, messages, test=False):
     headers = {"Content-Type": "application/json"}
     if profile.get("auth_mode") == "bearer":
         headers["Authorization"] = "Bearer " + profile["api_key"]
     payload = {"model": profile["model"], "messages": messages, "stream": False,
                profile.get("token_parameter", "max_tokens"): 128 if test else profile.get("max_tokens", 2048)}
+    if not test:
+        output_format = analysis_response_format(profile, messages)
+        if output_format:
+            payload["response_format"] = output_format
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(100, connect=10), follow_redirects=False, trust_env=False) as client:
             async with client.stream("POST", profile["base_url"] + "/chat/completions", headers=headers, json=payload) as response:
@@ -117,7 +162,7 @@ async def completion(profile, messages, test=False):
                         raise HTTPException(502, "LLM отклонила API key или доступ к модели (401/403)")
                     if code == 429:
                         raise HTTPException(429, "Лимит запросов или квоты LLM (429)")
-                    raise HTTPException(502, f"LLM вернула HTTP {code}. Проверьте Base URL, модель и параметр лимита токенов.")
+                    raise HTTPException(502, f"LLM вернула HTTP {code}. Проверьте Base URL, модель, формат ответа и параметр лимита токенов. Автоматический повтор не выполнялся.")
                 chunks, size = [], 0
                 async for chunk in response.aiter_bytes():
                     size += len(chunk)
@@ -129,14 +174,16 @@ async def completion(profile, messages, test=False):
         message = choice["message"]
         if not isinstance(message, dict):
             raise ValueError()
+        if message.get("refusal") or choice.get("finish_reason") == "content_filter":
+            raise HTTPException(502, "LLM отказалась формировать ответ (refusal/content_filter). Отчёт не создан.")
+        if not test and choice.get("finish_reason") == "length":
+            raise HTTPException(502, "Ответ LLM обрезан лимитом токенов (length). Увеличьте максимум выходных токенов в настройках, например до 4096–8192, и повторите анализ вручную.")
         text = message.get("content")
         if test:
             # Reasoning models can consume a tiny test budget without final text.
             text = text if isinstance(text, str) and text.strip() else "Request accepted"
         elif not isinstance(text, str) or not text.strip():
-            raise ValueError()
-        if not test and choice.get("finish_reason") == "length":
-            raise HTTPException(502, "Ответ LLM обрезан лимитом токенов. Увеличьте лимит в настройках.")
+            raise HTTPException(502, "LLM вернула пустое поле message.content. Проверьте модель и лимит выходных токенов.")
         usage = data.get("usage") or {}
         usage = {k: v for k, v in usage.items() if k in ("prompt_tokens", "completion_tokens", "total_tokens") and isinstance(v, int)}
         return text, usage
@@ -149,33 +196,62 @@ async def completion(profile, messages, test=False):
 
 
 def parse_analysis(text, allowed):
+    def invalid(reason):
+        # Only fixed field paths/reasons, never raw provider content or secrets.
+        raise HTTPException(502, "Ответ ИИ не прошёл проверку: " + reason +
+                            " Непроверенный отчёт не отображается. Проверьте формат ответа в настройках ИИ.")
+
+    if not isinstance(text, str):
+        invalid("ожидалась строка JSON.")
     text = text.strip()
     if text.startswith("```"):
         text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.I)
     try:
         data = json.loads(text)
-        if not isinstance(data, dict) or not isinstance(data.get("summary"), str):
-            raise ValueError()
-        if len(data["summary"]) > 5000:
-            raise ValueError()
-        for key in ("findings", "hypotheses", "next_checks"):
-            if not isinstance(data.get(key), list) or len(data[key]) > 10:
-                raise ValueError()
-        for item in data["findings"]:
-            if not isinstance(item, dict) or not all(isinstance(item.get(k), str) and len(item[k]) <= 5000 for k in ("title", "interpretation")):
-                raise ValueError()
-            ids = item.get("evidence_ids")
-            if not isinstance(ids, list) or not 1 <= len(ids) <= 20 or not all(isinstance(i, str) and i in allowed for i in ids):
-                raise ValueError()
-        for key in ("hypotheses", "next_checks"):
-            if not all(isinstance(i, str) and len(i) <= 5000 for i in data[key]):
-                raise ValueError()
-        for key in ('impact','conclusion'):
-            if key in data and (not isinstance(data[key],str) or len(data[key])>5000):raise ValueError()
-        if 'limitations' in data and (not isinstance(data['limitations'],list) or len(data['limitations'])>12 or not all(isinstance(v,str) and len(v)<=3000 for v in data['limitations'])):raise ValueError()
-        return {k: data[k] for k in ("summary", "findings", "hypotheses", "next_checks", "impact", "limitations", "conclusion") if k in data}
-    except (ValueError, TypeError, KeyError):
-        raise HTTPException(502, "LLM не вернула корректный JSON с существующими ссылками на evidence. Непроверенный ответ не отображается.")
+    except (ValueError, TypeError):
+        invalid("некорректный JSON (json_syntax).")
+    if not isinstance(data, dict):
+        invalid("корень JSON должен быть объектом.")
+
+    def string(value, path, limit=5000):
+        if not isinstance(value, str):
+            invalid(f"{path}: ожидалась строка.")
+        if len(value) > limit:
+            invalid(f"{path}: превышен лимит {limit} символов.")
+
+    def array(value, path, limit):
+        if not isinstance(value, list):
+            invalid(f"{path}: ожидался список.")
+        if len(value) > limit:
+            invalid(f"{path}: больше {limit} элементов.")
+
+    string(data.get("summary"), "summary")
+    for key in ("findings", "hypotheses", "next_checks"):
+        array(data.get(key), key, 10)
+    for n, item in enumerate(data["findings"]):
+        path = f"findings[{n}]"
+        if not isinstance(item, dict):
+            invalid(f"{path}: ожидался объект.")
+        for key in ("title", "interpretation"):
+            string(item.get(key), f"{path}.{key}")
+        ids = item.get("evidence_ids")
+        array(ids, f"{path}.evidence_ids", 20)
+        if not ids:
+            invalid(f"{path}.evidence_ids: нет ссылок на измерения.")
+        for evidence_id in ids:
+            if not isinstance(evidence_id, str) or evidence_id not in allowed:
+                invalid(f"{path}.evidence_ids: ссылка отсутствует в отправленных измерениях (unknown_evidence).")
+    for key in ("hypotheses", "next_checks"):
+        for n, value in enumerate(data[key]):
+            string(value, f"{key}[{n}]")
+    for key in ("impact", "conclusion"):
+        if key in data:
+            string(data[key], key)
+    if "limitations" in data:
+        array(data["limitations"], "limitations", 12)
+        for n, value in enumerate(data["limitations"]):
+            string(value, f"limitations[{n}]", 3000)
+    return {k: data[k] for k in ("summary", "findings", "hypotheses", "next_checks", "impact", "limitations", "conclusion") if k in data}
 
 
 def register_ai_features(app, query_oap, config_path=None):

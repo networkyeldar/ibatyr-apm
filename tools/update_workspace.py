@@ -82,7 +82,7 @@ def main():
             run('systemctl','start','ibatyr-apm.service')
             ready(args.port)
             with urlopen(f'http://127.0.0.1:{args.port}/ai/',timeout=5) as r:
-                if 'v=5.0-analysis-1' not in r.read().decode():
+                if 'v=5.0-analysis-2' not in r.read().decode():
                     raise RuntimeError('Сервер отдаёт другую версию интерфейса')
         except Exception:
             print('Обновление не прошло проверку. Возвращаем предыдущие файлы.',flush=True)

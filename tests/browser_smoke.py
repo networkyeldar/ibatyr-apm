@@ -15,7 +15,7 @@ class Handler(SimpleHTTPRequestHandler):
     def log_message(self,*args):pass
 
 server=ThreadingHTTPServer(('127.0.0.1',0),Handler);Thread(target=server.serve_forever,daemon=True).start()
-counts={};queries={};fail_dashboard=False;missing_jvm=False
+counts={};queries={};fail_dashboard=False;missing_jvm=False;fail_llm=False
 
 def fixture(route):
     global fail_dashboard
@@ -30,8 +30,12 @@ def fixture(route):
     elif p.endswith('/license/history'):data={'events':[]}
     elif p.endswith('/services'):data={'services':[{'id':'demo','name':'Synergy Demo'}]}
     elif p.endswith('/llm/providers'):data={'providers':[{'id':'external','configured':True,'model':'fixture-model'},{'id':'local','configured':True,'model':'fixture-local'}]}
+    elif p.endswith('/llm/providers/external'):
+        data={'id':'external', 'configured':True, **route.request.post_data_json};queries[p]=route.request.post_data_json
     elif p.endswith('/trace-analysis') or p.endswith('/overview-analysis'):
         body=route.request.post_data_json;queries[p]=body
+        if fail_llm:
+            route.fulfill(status=502,json={'detail':'Ответ ИИ не прошёл проверку: findings[0].evidence_ids: unknown_evidence.'});return
         data={'report_id':'fixture-report','provider':body['provider'],'model':'fixture-model','elapsed_seconds':1.2,'usage':{'total_tokens':500},'analysis':{'summary':'Подробный анализ выбранного периода.','impact':'Деградация требует проверки.','findings':[{'title':'Пик задержки','interpretation':'Измеренная задержка выросла.','evidence_ids':['E001']}],'hypotheses':['Совпадение не доказывает причину.'],'next_checks':['P1: проверить thread dump.'],'limitations':['Выборка'],'conclusion':'Причина не доказана.'},'evidence_links':{'E001':{'title':'Метрика задержки'}},'evidence':[{'id':'E001','max':1500}],'limitations':['Тестовые данные'],'metadata':{'scope':'overview','service':{'name':'Synergy Demo'},'period':{'start':body.get('start',start),'end_exclusive':body.get('end',end)}},'notice':'Synthetic report.'}
     elif p.endswith('.pdf'):
         route.fulfill(body=b'%PDF-1.4 synthetic download fixture',content_type='application/pdf',headers={'Content-Disposition':'attachment; filename="report.pdf"'});return
@@ -63,6 +67,16 @@ try:
         page.locator('#latency-chart svg').wait_for()
         assert page.locator('#alerts-panel').is_hidden()
         assert counts.get('/api/ai/alerts',0)==0
+        page.locator('#settings-nav').click()
+        assert page.locator('#provider-response-format').input_value()=='auto'
+        page.locator('#provider-url').fill('https://api.openai.com/v1')
+        page.locator('#provider-model').fill('gpt-4o-mini-2024-07-18')
+        page.locator('#provider-response-format').select_option('json_schema')
+        with page.expect_response('**/api/ai/llm/providers/external'):
+            page.locator('#provider-save').click()
+        assert queries['/api/ai/llm/providers/external']['response_format']=='json_schema'
+        page.locator('#settings-close').click()
+
         page.locator('.alerts-nav').click();page.locator('.alert-card').first.wait_for()
         assert page.url.endswith('#alerts-panel')
         assert page.locator('#monitor-view').is_hidden()
@@ -101,6 +115,15 @@ try:
         with page.expect_download() as download_info:
             page.locator('#trace-pdf').click()
         assert download_info.value.suggested_filename.endswith('.pdf')
+        fail_llm=True
+        with page.expect_response('**/api/ai/llm/trace-analysis'):
+            page.locator('#ai-prepare').click()
+        page.wait_for_function('!state.aiBusy')
+        assert 'unknown_evidence' in page.locator('#ai-message').inner_text()
+        assert page.locator('#trace-pdf').is_hidden()
+        assert counts['/api/ai/llm/trace-analysis']==2
+        fail_llm=False
+
 
         page.locator('#live-enabled').check();page.wait_for_function('!live.busy');assert page.locator('#detail').inner_text()==before
         assert page.locator('.live-point').count()>0
