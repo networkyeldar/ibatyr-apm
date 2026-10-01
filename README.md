@@ -7,7 +7,7 @@
 сервера/Java-агента. Не требуется старый каталог `~/skywalking-ai/backend`.
 Перед клиентским production-развёртыванием пройдите [приёмку](docs/VALIDATION.md).
 
-[Релизы](https://github.com/networkyeldar/ibatyr-apm/releases) · [CI](https://github.com/networkyeldar/ibatyr-apm/actions) · [Быстрый старт](#быстрый-старт) · [Elasticsearch с нуля](docs/ELASTICSEARCH.md) · [Алерты и Live](docs/ALERTS.md) · [Сервер](docs/SERVER.md) · [Агент](docs/AGENT.md) ·
+[Релизы](https://github.com/networkyeldar/ibatyr-apm/releases) · [CI](https://github.com/networkyeldar/ibatyr-apm/actions) · [Быстрый старт](#быстрый-старт) · [Elasticsearch с нуля](docs/ELASTICSEARCH.md) · [Алерты и Live](docs/ALERTS.md) · [JVM](docs/JVM.md) · [Сервер](docs/SERVER.md) · [Агент](docs/AGENT.md) ·
 [Лицензирование](docs/LICENSING.md) · [Обслуживание](docs/OPERATIONS.md) ·
 [GitHub и релизы](docs/GITHUB.md) · [Результаты проверок](docs/VALIDATION.md)
 
@@ -108,6 +108,9 @@ sudo python3 install.py agent \
 Подробнее: [обычный Java-процесс и systemd](docs/AGENT.md).
 
 ## Интерфейс
+
+Отдельный раздел **JVM**: CPU, Heap, GC, потоки и классы с выбором экземпляра,
+историческим периодом и Live. [Единицы, ограничения и обновление](docs/JVM.md).
 
 ![Демонстрационный дашборд iBatyr APM](docs/images/dashboard.png)
 

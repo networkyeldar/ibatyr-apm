@@ -1,7 +1,7 @@
 "use strict";
 const live = {timer:null, busy:false, generation:0, alertVersion:0, alertController:null, alertPage:1, alerts:null, lastSuccess:null, failures:0, lastServices:0, hidden:{}};
 function pauseLive(){ $('live-enabled').checked=false;clearTimeout(live.timer);live.generation++;$('live-label').textContent='Исторический просмотр';$('live-dot').classList.remove('on'); }
-function resetLive(){pauseLive();live.alertVersion++;live.alertController?.abort();$('alerts-refresh').disabled=false;$('alerts-panel').setAttribute('aria-busy','false');live.alerts=null;live.lastSuccess=null;$('alert-dialog').close();$('alert-detail').replaceChildren();$('alert-list').replaceChildren();$('alert-count').textContent='—';$('alert-status').textContent='Ожидаем данные OAP.';}
+function resetLive(){resetJVM();pauseLive();live.alertVersion++;live.alertController?.abort();$('alerts-refresh').disabled=false;$('alerts-panel').setAttribute('aria-busy','false');live.alerts=null;live.lastSuccess=null;$('alert-dialog').close();$('alert-detail').replaceChildren();$('alert-list').replaceChildren();$('alert-count').textContent='—';$('alert-status').textContent='Ожидаем данные OAP.';}
 function scheduleLive(){clearTimeout(live.timer);const enabled=$('live-enabled').checked;$('live-label').textContent=enabled?'LIVE · последний час':'Исторический просмотр';$('live-dot').classList.toggle('on',enabled&&!document.hidden);if(enabled&&state.csrf&&!document.hidden)live.timer=setTimeout(refreshLive,Number($('live-interval').value)*1000*Math.min(4,1+live.failures));}
 function setInputs(start,end){const value=$('timezone').value;const sign=value[0]==='-'?-1:1;const [h,m]=value.slice(1).split(':').map(Number);const offset=sign*(h*60+m)*60000;for(const[id,date]of [['start',start],['end',end]])$(id).value=new Date(date.getTime()+offset).toISOString().slice(0,16);}
 function readAlertPeriod(){return readPeriod();}
@@ -13,6 +13,7 @@ async function refreshLive(){
     if(state.view==='alerts'){const ok=await refreshAlerts();if(generation!==live.generation||!state.csrf)return;if(!ok)throw new Error('Алерты недоступны');live.lastSuccess=new Date();live.failures=0;$('live-status').textContent='Алерты обновлены '+live.lastSuccess.toLocaleTimeString('ru-RU');return;}
     if(Date.now()-live.lastServices>60000){const data=await api('/api/ai/services');if(generation!==live.generation||!state.csrf)return;const selected=$('service').value;const ids=new Set(data.services.map(s=>s.id));if(selected&&!ids.has(selected))throw new Error('Выбранный сервис больше не доступен в GENERAL');$('service').replaceChildren(...data.services.map(s=>{const o=el('option',s.name);o.value=s.id;return o;}));if(selected)$('service').value=selected;live.lastServices=Date.now();$('search').disabled=!$('service').value;}
     if(!$('service').value){$('live-status').textContent='Ожидаем сервисы GENERAL';return;}
+    if(state.view==='jvm'){const ok=await refreshJVM(true);if(generation!==live.generation||!state.csrf)return;if(!ok)throw new Error('JVM недоступна');live.lastSuccess=new Date();live.failures=0;return;}
     const query=readQuery();state.query=query;
     $('live-status').textContent='Обновляем метрики…';
     const work=[loadDashboard(query,true)];
@@ -76,7 +77,7 @@ function drawChart(id,points,series,unit){
   box.append(toggles,el('div',latest?'Последняя минута · '+dateText(latest.time):'Нет наблюдений','chart-latest-time'));
   const visible=series.filter(([k])=>!hidden.has(k));
   const numbers=points.flatMap(p=>visible.map(([k])=>p[k])).filter(valid);
-  if(!numbers.length){box.append(el('div',visible.length?'Нет наблюдений с положительной нагрузкой':'Выберите ряд на графике','empty'));return;}
+  if(!numbers.length){box.append(el('div',visible.length?'Нет доступных наблюдений':'Выберите ряд на графике','empty'));return;}
   const peak=Math.max(...numbers,1);
   const rawStep=peak/4,magnitude=10**Math.floor(Math.log10(rawStep));
   const step=[1,2,2.5,5,10].find(n=>n*magnitude>=rawStep)*magnitude;
@@ -129,7 +130,7 @@ function drawChart(id,points,series,unit){
   function select(from=index,to=index,range=false){
     pauseLive();const a=Date.parse(points[Math.min(from,to)].time),b=Date.parse(points[Math.max(from,to)].time);
     setInputs(new Date(a-(range?0:120000)),new Date(b+(range?60000:180000)));
-    search(1,true);$('explorer').scrollIntoView({behavior:'smooth'});
+    if(state.view==='jvm'){cancelViewRequests();refreshJVM();}else{search(1,true);$('explorer').scrollIntoView({behavior:'smooth'});}
   }
   function at(e){const r=svg.getBoundingClientRect();return Math.max(0,Math.min(points.length-1,Math.round(((e.clientX-r.left)/r.width*W-L)/(W-L-R)*(points.length-1))));}
   svg.addEventListener('pointermove',e=>{focus(at(e));if(dragStart!==null){selection.setAttribute('x',x(Math.min(dragStart,index)));selection.setAttribute('width',Math.abs(x(dragStart)-x(index)));}});
@@ -143,27 +144,28 @@ function drawChart(id,points,series,unit){
   stage.append(svg,tip);box.append(stage,hint);
 }
 $('live-enabled').onchange=()=>{live.generation++;if($('live-enabled').checked)refreshLive();else pauseLive();scheduleLive();};$('live-interval').onchange=scheduleLive;$('refresh-now').onclick=refreshLive;
-for(const id of ['start','end','timezone','service','threshold','errors-only'])$(id).addEventListener('change',()=>{pauseLive();state.dashboardVersion++;state.dashboardController?.abort();live.alertVersion++;live.alertController?.abort();$('alerts-refresh').disabled=false;$('alerts-panel').setAttribute('aria-busy','false');state.listVersion++;state.listController?.abort();setBusy(false);$('live-status').textContent='Фильтры изменены — нажмите «'+(state.view==='alerts'?'Обновить алерты':'Обновить обзор')+'»';});
+for(const id of ['start','end','timezone','service','threshold','errors-only'])$(id).addEventListener('change',()=>{pauseLive();cancelJVM();state.dashboardVersion++;state.dashboardController?.abort();live.alertVersion++;live.alertController?.abort();$('alerts-refresh').disabled=false;$('alerts-panel').setAttribute('aria-busy','false');state.listVersion++;state.listController?.abort();setBusy(false);$('live-status').textContent='Фильтры изменены — нажмите «'+(state.view==='alerts'?'Обновить алерты':state.view==='jvm'?'Обновить JVM':'Обновить обзор')+'»';});
 $('alerts-refresh').onclick=refreshAlerts;
 $('alert-severity').onchange=refreshAlerts;
 $('alert-prev').onclick=()=>{pauseLive();loadAlerts(live.alerts?.period?{start:live.alerts.period.start,end:live.alerts.period.end_exclusive}:readAlertPeriod(),live.alertPage-1);};$('alert-next').onclick=()=>{pauseLive();loadAlerts(live.alerts?.period?{start:live.alerts.period.start,end:live.alerts.period.end_exclusive}:readAlertPeriod(),live.alertPage+1);};$('alert-close').onclick=()=>$('alert-dialog').close();
 document.addEventListener('visibilitychange',()=>{if(document.hidden){clearTimeout(live.timer);$('live-dot').classList.remove('on');$('live-status').textContent='Автообновление приостановлено: вкладка скрыта';}else if($('live-enabled').checked)refreshLive();});
 
 function cancelViewRequests(){
+  cancelJVM();
   live.generation++;state.dashboardVersion++;state.dashboardController?.abort();
   state.listVersion++;state.listController?.abort();live.alertVersion++;live.alertController?.abort();
   $('alerts-refresh').disabled=false;$('alerts-panel').setAttribute('aria-busy','false');setBusy(false);
 }
 function showView(hash=location.hash,load=true){
-  const next=hash==='#alerts-panel'?'alerts':'monitor',changed=state.view!==next;
+  const next=hash==='#alerts-panel'?'alerts':hash==='#jvm'?'jvm':'monitor',changed=state.view!==next;
   if(changed)cancelViewRequests();state.view=next;
-  const alerts=next==='alerts';$('alerts-panel').hidden=!alerts;$('monitor-view').hidden=alerts;
-  document.querySelectorAll('[data-monitor-filter]').forEach(n=>{n.hidden=alerts;});$('service').required=!alerts;
-  $('page-title').textContent=alerts?'Алерты мониторинга':'Производительность под контролем';
-  $('page-description').textContent=alerts?'Срабатывания по всем сервисам. Выберите период и уровень критичности.':'Находите медленные вызовы. Проверяйте SQL. Объясняйте задержки.';
-  document.querySelectorAll('.rail nav a').forEach(n=>{const active=n.getAttribute('href')===(alerts?'#alerts-panel':hash==='#explorer'?'#explorer':'#overview');if(active)n.setAttribute('aria-current','page');else n.removeAttribute('aria-current');});
+  const alerts=next==='alerts',isJvm=next==='jvm';$('alerts-panel').hidden=!alerts;$('monitor-view').hidden=alerts||isJvm;$('jvm-view').hidden=!isJvm;
+  document.querySelectorAll('[data-monitor-filter]').forEach(n=>{n.hidden=alerts||(isJvm&&!n.contains($('service')));});$('service').required=!alerts;$('threshold').required=!alerts&&!isJvm;
+  $('page-title').textContent=alerts?'Алерты мониторинга':isJvm?'Нагрузка и здоровье JVM':'Производительность под контролем';
+  $('page-description').textContent=alerts?'Срабатывания по всем сервисам. Выберите период и уровень критичности.':isJvm?'Наблюдайте за экземплярами Java. Выделяйте периоды нагрузки.':'Находите медленные вызовы. Проверяйте SQL. Объясняйте задержки.';
+  document.querySelectorAll('.rail nav a').forEach(n=>{const active=n.getAttribute('href')===(alerts?'#alerts-panel':isJvm?'#jvm':hash==='#explorer'?'#explorer':'#overview');if(active)n.setAttribute('aria-current','page');else n.removeAttribute('aria-current');});
   const shortcut=document.querySelector('.alerts-shortcut');shortcut.href=alerts?'#overview':'#alerts-panel';shortcut.textContent=alerts?'◫ Обзор':'◉ Алерты';
-  $('live-help').textContent=alerts?'Автообновление срабатываний за последний час · возможна задержка поступления событий':'Минутные метрики · задержка поступления возможна · выбранная трассировка сохраняется при автообновлении';
+  $('live-help').textContent=alerts?'Автообновление срабатываний за последний час · возможна задержка поступления событий':isJvm?'Минутные метрики JVM · Live опрашивает последний час · клик или выделение на графике сужает период':'Минутные метрики · задержка поступления возможна · выбранная трассировка сохраняется при автообновлении';
   setBusy(state.busy);
   if(changed&&load&&state.csrf)refreshCurrent();
   if(hash==='#explorer')$('explorer').scrollIntoView({behavior:'smooth'});
@@ -173,7 +175,7 @@ async function refreshAlerts(){
   try{const ok=await loadAlerts(readPeriod(),1);if(ok&&state.view==='alerts'){$('live-status').textContent='Алерты получены '+new Date().toLocaleTimeString('ru-RU');}return ok;}
   catch(e){$('live-status').textContent=e.message;$('alert-status').textContent=e.message;$('alert-status').classList.add('error');return false;}
 }
-async function refreshCurrent(){$('live-status').textContent='Загружаем выбранный период…';return state.view==='alerts'?refreshAlerts():search(1,true);}
+async function refreshCurrent(){$('live-status').textContent='Загружаем выбранный период…';return state.view==='alerts'?refreshAlerts():state.view==='jvm'?refreshJVM():search(1,true);}
 function applyPreset(kind){
   pauseLive();cancelViewRequests();
   if(kind==='day'){

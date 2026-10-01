@@ -16,7 +16,7 @@ async function api(path, controller = new AbortController(), options = {}) {
     return data;
   } finally { clearTimeout(timer); }
 }
-function setBusy(value) { state.busy=value; $('search').disabled=value||(state.view!=='alerts'&&!$('service').value); $('search').textContent=value?'Загрузка…':state.view==='alerts'?'Обновить алерты':'Обновить обзор'; updatePager(); }
+function setBusy(value) { state.busy=value; $('search').disabled=value||(state.view!=='alerts'&&!$('service').value); $('search').textContent=value?'Загрузка…':state.view==='alerts'?'Обновить алерты':state.view==='jvm'?'Обновить JVM':'Обновить обзор'; updatePager(); }
 function updatePager() { $('previous').disabled=state.busy||!state.result||state.page<=1; $('next').disabled=state.busy||!state.result||!state.result.pagination.may_have_more; $('page-label').textContent=`Страница ${state.page}`; }
 function invalidateDetails() { $('export-trace').disabled=true;invalidateAI(); state.detailController?.abort(); state.detailVersion++; state.detail=null; state.selected=null; syncAI(); $('detail').replaceChildren(el('div','Выберите вызов слева','empty detail-empty')); }
 function readPeriod() {

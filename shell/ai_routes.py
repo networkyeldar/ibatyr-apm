@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field, SecretStr
 from ai_evidence import build_evidence
 from ai_security import Security, write_config
 from dashboard_routes import register_dashboard
+from jvm_routes import register_jvm
 from alert_routes import register_alerts
 from license_manager import LicenseManager
 
@@ -181,6 +182,7 @@ def register_ai_features(app, query_oap, config_path=None):
     async def validation_error(request, exc):
         return JSONResponse({"detail": [{"loc": e["loc"], "msg": e["msg"], "type": e["type"]} for e in exc.errors()]}, status_code=422)
     register_dashboard(app, query_oap)
+    register_jvm(app, query_oap)
     register_alerts(app, query_oap)
     trace_endpoint = next((r.endpoint for r in app.routes if getattr(r, "path", None) == "/api/ai/traces/{trace_id}"), None)
     if trace_endpoint is None:

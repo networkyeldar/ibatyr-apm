@@ -30,6 +30,10 @@ def fixture(route):
     elif p.endswith('/license/history'):data={'events':[]}
     elif p.endswith('/services'):data={'services':[{'id':'demo','name':'Synergy Demo'}]}
     elif p.endswith('/llm/providers'):data={'providers':[]}
+    elif p.endswith('/jvm'):
+        instance={'id':q.get('instance_id','jvm1'),'name':'JVM demo '+q.get('instance_id','jvm1')}
+        points=[{'time':(base+timedelta(minutes=i)).isoformat(),'cpu_percent':20+8*math.sin(i*.2),'heap_gib':19+math.sin(i*.1),'heap_max_gib':30,'heap_percent':64,'nonheap_gib':.7,'metaspace_gib':.3,'threads_live':2800+30*math.sin(i*.2),'threads_blocked':68+10*math.sin(i*.1),'threads_runnable':120,'threads_waiting':400,'threads_timed_waiting':2200,'young_gc_ms':1200+400*math.sin(i*.3),'old_gc_ms':0,'normal_gc_ms':0,'young_gc_count':5,'old_gc_count':0,'normal_gc_count':0,'classes_loaded':45000} for i in range(minute_count)]
+        data={'service':{'id':'demo','name':'Synergy Demo'},'instances':[{'id':'jvm1','name':'JVM demo jvm1'},{'id':'jvm2','name':'JVM demo jvm2'}],'instance':instance,'points':points,'latest':points[-1],'period':{'start':start,'end_exclusive':end},'coverage':{'requested_minutes':minute_count,'minutes_with_jvm_evidence':minute_count},'warnings':['Synthetic fixture. Not production measurements.']}
     elif p.endswith('/dashboard'):
         if fail_dashboard:route.fulfill(status=502,json={'detail':'Test upstream offline'});return
         points=[{'time':(base+timedelta(minutes=i)).isoformat(),'calls_per_minute':round(450+140*math.sin(i*.25)+35*math.cos(i*.9)),'mean_latency_ms':round(260+90*math.sin(i*.3)+(650 if 28<=i<=32 else 0)),'p95_ms':round(740+230*math.sin(i*.3)+(2000 if 28<=i<=32 else 0)),'error_rate_percent':round(.12+(.7 if 28<=i<=32 else 0)+.08*abs(math.sin(i*.4)),2)} for i in range(minute_count)]
@@ -154,6 +158,44 @@ try:
         assert counts.get('/api/ai/dashboard',0)==counts_before.get('/api/ai/dashboard',0)
         assert counts.get('/api/ai/traces',0)==counts_before.get('/api/ai/traces',0)
         direct.screenshot(path='/tmp/ibatyr-alerts-mobile.png',full_page=True)
+        # JVM deep link isolates requests and supports period/instance changes.
+        counts_before=dict(counts)
+        direct.goto(f'http://127.0.0.1:{server.server_port}/ai/#jvm')
+        direct.locator('#jvm-cpu svg').wait_for()
+        assert direct.locator('#monitor-view').is_hidden()
+        assert direct.locator('#alerts-panel').is_hidden()
+        assert counts.get('/api/ai/dashboard',0)==counts_before.get('/api/ai/dashboard',0)
+        assert counts.get('/api/ai/traces',0)==counts_before.get('/api/ai/traces',0)
+        with direct.expect_response('**/api/ai/jvm?*'):
+            direct.locator('#jvm-instance').select_option('jvm2')
+        direct.wait_for_function('!state.busy')
+        assert queries['/api/ai/jvm']['instance_id']=='jvm2'
+        with direct.expect_response('**/api/ai/jvm?*'):
+            direct.locator('#last-day').click()
+        direct.wait_for_function('!state.busy')
+        q=queries['/api/ai/jvm']
+        assert (datetime.fromisoformat(q['end'])-datetime.fromisoformat(q['start'])).total_seconds()==86400
+        direct.locator('#jvm-cpu svg').focus();direct.keyboard.press('ArrowLeft')
+        assert direct.locator('#jvm-cpu .chart-floating-tip').is_visible()
+        with direct.expect_response('**/api/ai/jvm?*'):
+            direct.keyboard.press('Enter')
+        direct.wait_for_function('!state.busy')
+        q=queries['/api/ai/jvm']
+        assert (datetime.fromisoformat(q['end'])-datetime.fromisoformat(q['start'])).total_seconds()==300
+        assert direct.url.endswith('#jvm')
+        with direct.expect_response('**/api/ai/jvm?*'):
+            direct.locator('#live-enabled').check()
+        direct.wait_for_function('!live.busy')
+        assert queries['/api/ai/jvm']['instance_id']=='jvm2'
+        direct.locator('#live-enabled').uncheck()
+        for width in [1500,800,390]:
+            direct.set_viewport_size({'width':width,'height':1100})
+            assert direct.evaluate('document.documentElement.scrollWidth <= innerWidth'),f'JVM overflow {width}'
+        direct.set_viewport_size({'width':1500,'height':1100})
+        direct.evaluate('window.scrollTo(0,0)')
+        direct.screenshot(path='/tmp/ibatyr-jvm-desktop.png',full_page=True)
+        direct.locator('#logout').click();direct.locator('#login-screen').wait_for(state='visible')
+        assert direct.locator('#jvm-stats').inner_text()==''
         assert not errors,errors
         browser.close()
     print('Browser OK: separate pages, calendar-day/24h auto-load, isolated requests, alerts/drilldown, live pinned trace, chart keyboard/toggles, stale state, history pause, themes, 3 widths, logout; no JS errors.')
