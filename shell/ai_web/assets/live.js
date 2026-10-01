@@ -4,17 +4,18 @@ function pauseLive(){ $('live-enabled').checked=false;clearTimeout(live.timer);l
 function resetLive(){pauseLive();live.alertVersion++;live.alertController?.abort();$('alerts-refresh').disabled=false;$('alerts-panel').setAttribute('aria-busy','false');live.alerts=null;live.lastSuccess=null;$('alert-dialog').close();$('alert-detail').replaceChildren();$('alert-list').replaceChildren();$('alert-count').textContent='—';$('alert-status').textContent='Ожидаем данные OAP.';}
 function scheduleLive(){clearTimeout(live.timer);const enabled=$('live-enabled').checked;$('live-label').textContent=enabled?'LIVE · последний час':'Исторический просмотр';$('live-dot').classList.toggle('on',enabled&&!document.hidden);if(enabled&&state.csrf&&!document.hidden)live.timer=setTimeout(refreshLive,Number($('live-interval').value)*1000*Math.min(4,1+live.failures));}
 function setInputs(start,end){const value=$('timezone').value;const sign=value[0]==='-'?-1:1;const [h,m]=value.slice(1).split(':').map(Number);const offset=sign*(h*60+m)*60000;for(const[id,date]of [['start',start],['end',end]])$(id).value=new Date(date.getTime()+offset).toISOString().slice(0,16);}
-function readAlertPeriod(){const offset=$('timezone').value;return {start:$('start').value+':00'+offset,end:$('end').value+':00'+offset};}
+function readAlertPeriod(){return readPeriod();}
 async function refreshLive(){
   if(!state.csrf||document.hidden||live.busy||state.busy){scheduleLive();return;}
   live.busy=true;const generation=live.generation;
   try{
-    if($('live-enabled').checked)$('last-hour').click();
+    if($('live-enabled').checked)setRollingPeriod(60);
+    if(state.view==='alerts'){const ok=await refreshAlerts();if(generation!==live.generation||!state.csrf)return;if(!ok)throw new Error('Алерты недоступны');live.lastSuccess=new Date();live.failures=0;$('live-status').textContent='Алерты обновлены '+live.lastSuccess.toLocaleTimeString('ru-RU');return;}
     if(Date.now()-live.lastServices>60000){const data=await api('/api/ai/services');if(generation!==live.generation||!state.csrf)return;const selected=$('service').value;const ids=new Set(data.services.map(s=>s.id));if(selected&&!ids.has(selected))throw new Error('Выбранный сервис больше не доступен в GENERAL');$('service').replaceChildren(...data.services.map(s=>{const o=el('option',s.name);o.value=s.id;return o;}));if(selected)$('service').value=selected;live.lastServices=Date.now();$('search').disabled=!$('service').value;}
-    if(!$('service').value){const ok=await loadAlerts(readAlertPeriod(),1);if(!ok)throw new Error('Алерты недоступны');$('live-status').textContent='Алерты обновлены; ожидаем сервисы GENERAL';return;}
+    if(!$('service').value){$('live-status').textContent='Ожидаем сервисы GENERAL';return;}
     const query=readQuery();state.query=query;
-    $('live-status').textContent='Обновляем метрики и алерты…';
-    const work=[loadDashboard(query,true),loadAlerts(query,1)];
+    $('live-status').textContent='Обновляем метрики…';
+    const work=[loadDashboard(query,true)];
     // Preserve selected trace, SQL, scroll and AI context during background refresh.
     if(!state.selected&&state.page===1){const v=++state.listVersion;state.listController?.abort();const c=new AbortController();state.listController=c;work.push(api('/api/ai/traces?'+new URLSearchParams({...query,page:1}),c).then(data=>{if(generation===live.generation&&v===state.listVersion){state.result=data;renderResults();}return true;}));}
     const result=await Promise.allSettled(work);
@@ -27,7 +28,7 @@ async function refreshLive(){
 }
 async function loadAlerts(query,page=1){
   live.alertController?.abort();const c=new AbortController();live.alertController=c;const v=++live.alertVersion;live.alertPage=page;
-  $('alert-prev').disabled=true;$('alert-next').disabled=true;$('alerts-refresh').disabled=true;$('alerts-panel').setAttribute('aria-busy','true');
+  $('alert-prev').disabled=true;$('alert-next').disabled=true;$('alerts-refresh').disabled=true;$('alerts-panel').setAttribute('aria-busy','true');$('alert-status').textContent='Загружаем алерты за выбранный период…';
   try{
     const data=await api('/api/ai/alerts?'+new URLSearchParams({start:query.start,end:query.end,severity:$('alert-severity').value,page,page_size:12}),c);
     if(v!==live.alertVersion||!state.csrf)return false;
@@ -50,7 +51,7 @@ function openAlarm(a){
   const known=a.scope==='Service'&&Array.from($('service').options).some(o=>o.value===a.entity_id);
   if(!known)box.append(el('p','Сервис не сопоставлен автоматически. Для исследования используется сервис, выбранный в фильтре.','muted small'));
   $('alert-investigate').disabled=!$('service').value&&!known;
-  $('alert-investigate').onclick=()=>{pauseLive();if(known)$('service').value=a.entity_id;const t=Math.floor(a.time_ms/60000)*60000;setInputs(new Date(t-5*60000),new Date(t+6*60000));$('alert-dialog').close();search(1,true);$('explorer').scrollIntoView({behavior:'smooth'});};
+  $('alert-investigate').onclick=()=>{pauseLive();if(known)$('service').value=a.entity_id;const t=Math.floor(a.time_ms/60000)*60000;setInputs(new Date(t-5*60000),new Date(t+6*60000));$('alert-dialog').close();openMonitor();search(1,true);$('explorer').scrollIntoView({behavior:'smooth'});};
   $('alert-dialog').showModal();
 }
 function drawChart(id,points,series,unit){
@@ -142,11 +143,48 @@ function drawChart(id,points,series,unit){
   stage.append(svg,tip);box.append(stage,hint);
 }
 $('live-enabled').onchange=()=>{live.generation++;if($('live-enabled').checked)refreshLive();else pauseLive();scheduleLive();};$('live-interval').onchange=scheduleLive;$('refresh-now').onclick=refreshLive;
-for(const id of ['start','end','timezone','service','threshold','errors-only'])$(id).addEventListener('change',()=>{pauseLive();state.dashboardVersion++;state.dashboardController?.abort();live.alertVersion++;live.alertController?.abort();$('alerts-refresh').disabled=false;$('alerts-panel').setAttribute('aria-busy','false');state.listVersion++;state.listController?.abort();setBusy(false);$('live-status').textContent='Фильтры изменены — нажмите «Обновить обзор»';});
-$('whole-day').addEventListener('click',pauseLive);
-$('alerts-refresh').onclick=()=>loadAlerts(readAlertPeriod(),1);
-$('alert-severity').onchange=()=>loadAlerts(readAlertPeriod(),1);
+for(const id of ['start','end','timezone','service','threshold','errors-only'])$(id).addEventListener('change',()=>{pauseLive();state.dashboardVersion++;state.dashboardController?.abort();live.alertVersion++;live.alertController?.abort();$('alerts-refresh').disabled=false;$('alerts-panel').setAttribute('aria-busy','false');state.listVersion++;state.listController?.abort();setBusy(false);$('live-status').textContent='Фильтры изменены — нажмите «'+(state.view==='alerts'?'Обновить алерты':'Обновить обзор')+'»';});
+$('alerts-refresh').onclick=refreshAlerts;
+$('alert-severity').onchange=refreshAlerts;
 $('alert-prev').onclick=()=>{pauseLive();loadAlerts(live.alerts?.period?{start:live.alerts.period.start,end:live.alerts.period.end_exclusive}:readAlertPeriod(),live.alertPage-1);};$('alert-next').onclick=()=>{pauseLive();loadAlerts(live.alerts?.period?{start:live.alerts.period.start,end:live.alerts.period.end_exclusive}:readAlertPeriod(),live.alertPage+1);};$('alert-close').onclick=()=>$('alert-dialog').close();
 document.addEventListener('visibilitychange',()=>{if(document.hidden){clearTimeout(live.timer);$('live-dot').classList.remove('on');$('live-status').textContent='Автообновление приостановлено: вкладка скрыта';}else if($('live-enabled').checked)refreshLive();});
 
+function cancelViewRequests(){
+  live.generation++;state.dashboardVersion++;state.dashboardController?.abort();
+  state.listVersion++;state.listController?.abort();live.alertVersion++;live.alertController?.abort();
+  $('alerts-refresh').disabled=false;$('alerts-panel').setAttribute('aria-busy','false');setBusy(false);
+}
+function showView(hash=location.hash,load=true){
+  const next=hash==='#alerts-panel'?'alerts':'monitor',changed=state.view!==next;
+  if(changed)cancelViewRequests();state.view=next;
+  const alerts=next==='alerts';$('alerts-panel').hidden=!alerts;$('monitor-view').hidden=alerts;
+  document.querySelectorAll('[data-monitor-filter]').forEach(n=>{n.hidden=alerts;});$('service').required=!alerts;
+  $('page-title').textContent=alerts?'Алерты мониторинга':'Производительность под контролем';
+  $('page-description').textContent=alerts?'Срабатывания по всем сервисам. Выберите период и уровень критичности.':'Находите медленные вызовы. Проверяйте SQL. Объясняйте задержки.';
+  document.querySelectorAll('.rail nav a').forEach(n=>{const active=n.getAttribute('href')===(alerts?'#alerts-panel':hash==='#explorer'?'#explorer':'#overview');if(active)n.setAttribute('aria-current','page');else n.removeAttribute('aria-current');});
+  const shortcut=document.querySelector('.alerts-shortcut');shortcut.href=alerts?'#overview':'#alerts-panel';shortcut.textContent=alerts?'◫ Обзор':'◉ Алерты';
+  $('live-help').textContent=alerts?'Автообновление срабатываний за последний час · возможна задержка поступления событий':'Минутные метрики · задержка поступления возможна · выбранная трассировка сохраняется при автообновлении';
+  setBusy(state.busy);
+  if(changed&&load&&state.csrf)refreshCurrent();
+  if(hash==='#explorer')$('explorer').scrollIntoView({behavior:'smooth'});
+}
+function openMonitor(){history.pushState(null,'','#explorer');showView('#explorer',false);}
+async function refreshAlerts(){
+  try{const ok=await loadAlerts(readPeriod(),1);if(ok&&state.view==='alerts'){$('live-status').textContent='Алерты получены '+new Date().toLocaleTimeString('ru-RU');}return ok;}
+  catch(e){$('live-status').textContent=e.message;$('alert-status').textContent=e.message;$('alert-status').classList.add('error');return false;}
+}
+async function refreshCurrent(){$('live-status').textContent='Загружаем выбранный период…';return state.view==='alerts'?refreshAlerts():search(1,true);}
+function applyPreset(kind){
+  pauseLive();cancelViewRequests();
+  if(kind==='day'){
+    const day=$('start').value.slice(0,10),date=new Date(day+'T00:00:00Z');
+    if(!Number.isFinite(date.getTime())){status('Сначала выберите дату начала.',true);$('alert-status').textContent='Сначала выберите дату начала.';return;}
+    date.setUTCDate(date.getUTCDate()+1);$('start').value=day+'T00:00';$('end').value=date.toISOString().slice(0,10)+'T00:00';
+  }else setRollingPeriod(kind==='24h'?1440:60);
+  refreshCurrent();
+}
+window.addEventListener('hashchange',()=>showView());
+showView(location.hash,false);
+
+setRollingPeriod(60);
 (async()=>{try{const session=await api('/api/ai/auth/session');state.csrf=session.csrf_token;await initialize();}catch{showLogin();}})();

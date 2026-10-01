@@ -15,13 +15,14 @@ class Handler(SimpleHTTPRequestHandler):
     def log_message(self,*args):pass
 
 server=ThreadingHTTPServer(('127.0.0.1',0),Handler);Thread(target=server.serve_forever,daemon=True).start()
-counts={};fail_dashboard=False
+counts={};queries={};fail_dashboard=False
 
 def fixture(route):
     global fail_dashboard
     u=urlsplit(route.request.url);p=u.path;q={k:v[0] for k,v in parse_qs(u.query).items()};counts[p]=counts.get(p,0)+1
     start=q.get('start','2026-10-01T09:00:00+05:00');end=q.get('end','2026-10-01T10:00:00+05:00')
-    base=datetime.fromisoformat(start)
+    base=datetime.fromisoformat(start);queries[p]=q
+    minute_count=max(1,int((datetime.fromisoformat(end)-base).total_seconds()/60))
     data={}
     if p.endswith('/auth/session'):data={'csrf_token':'fixture-csrf'}
     elif p.endswith('/auth/logout'):data={'ok':True}
@@ -31,7 +32,7 @@ def fixture(route):
     elif p.endswith('/llm/providers'):data={'providers':[]}
     elif p.endswith('/dashboard'):
         if fail_dashboard:route.fulfill(status=502,json={'detail':'Test upstream offline'});return
-        points=[{'time':(base+timedelta(minutes=i)).isoformat(),'calls_per_minute':round(450+140*math.sin(i*.25)+35*math.cos(i*.9)),'mean_latency_ms':round(260+90*math.sin(i*.3)+(650 if 28<=i<=32 else 0)),'p95_ms':round(740+230*math.sin(i*.3)+(2000 if 28<=i<=32 else 0)),'error_rate_percent':round(.12+(.7 if 28<=i<=32 else 0)+.08*abs(math.sin(i*.4)),2)} for i in range(60)]
+        points=[{'time':(base+timedelta(minutes=i)).isoformat(),'calls_per_minute':round(450+140*math.sin(i*.25)+35*math.cos(i*.9)),'mean_latency_ms':round(260+90*math.sin(i*.3)+(650 if 28<=i<=32 else 0)),'p95_ms':round(740+230*math.sin(i*.3)+(2000 if 28<=i<=32 else 0)),'error_rate_percent':round(.12+(.7 if 28<=i<=32 else 0)+.08*abs(math.sin(i*.4)),2)} for i in range(minute_count)]
         data={'kpis':{'estimated_calls':20000,'estimated_mean_latency_ms':640,'max_minute_p95_ms':4800,'estimated_error_rate_percent':2.1},'points':points,'coverage':{'minutes_with_positive_traffic':60,'requested_minutes':60},'warnings':[]}
     elif p.endswith('/alerts'):
         page=int(q.get('page',1));sev=q.get('severity','CRITICAL');level='UNKNOWN' if sev=='ALL' else sev
@@ -49,9 +50,13 @@ try:
         page=browser.new_page(viewport={'width':1500,'height':1100},reduced_motion='reduce');errors=[];page.on('pageerror',lambda e:errors.append(str(e)))
         page.route('**/api/ai/**',fixture)
         page.goto(f'http://127.0.0.1:{server.server_port}/ai/')
-        page.locator('.alert-card').first.wait_for();page.locator('#latency-chart svg').wait_for()
+        page.locator('#latency-chart svg').wait_for()
+        assert page.locator('#alerts-panel').is_hidden()
+        assert counts.get('/api/ai/alerts',0)==0
+        page.locator('.alerts-nav').click();page.locator('.alert-card').first.wait_for()
+        assert page.url.endswith('#alerts-panel')
+        assert page.locator('#monitor-view').is_hidden()
         assert page.locator('.alert-card').count()==3
-        page.locator('.alerts-nav').click();assert page.url.endswith('#alerts-panel')
         page.locator('#live-enabled').uncheck()
         dashboard_before=counts.get('/api/ai/dashboard',0)
         traces_before=counts.get('/api/ai/traces',0)
@@ -60,21 +65,53 @@ try:
         page.wait_for_function("!document.getElementById('alerts-refresh').disabled")
         assert counts.get('/api/ai/dashboard',0)==dashboard_before
         assert counts.get('/api/ai/traces',0)==traces_before
-        page.evaluate('window.scrollTo(0,0)')
-        page.screenshot(path='/tmp/ibatyr-live-showcase.png',full_page=False)
-        page.locator('#overview').evaluate("e => e.scrollIntoView({block:'start',behavior:'instant'})")
-        chart_rect=page.locator('#latency-chart svg').bounding_box()
-        page.mouse.move(chart_rect['x']+chart_rect['width']*.6,chart_rect['y']+chart_rect['height']*.5)
-        page.screenshot(path='/tmp/ibatyr-interactive-charts.png',full_page=False)
+        # Full selected day must fetch immediately with exact timezone boundaries.
+        page.locator('#start').fill('2026-09-30T12:30')
+        with page.expect_response('**/api/ai/alerts?*'):
+            page.locator('#whole-day').click()
+        assert queries['/api/ai/alerts']['start']=='2026-09-30T00:00:00+05:00'
+        assert queries['/api/ai/alerts']['end']=='2026-10-01T00:00:00+05:00'
+        assert counts.get('/api/ai/dashboard',0)==dashboard_before
+        assert counts.get('/api/ai/traces',0)==traces_before
+        page.locator('#alert-severity').select_option('ALL');page.locator('.alert-card.unknown').first.wait_for()
+        page.screenshot(path='/tmp/ibatyr-alerts-page.png',full_page=False)
+        # Investigation explicitly leaves Alerts and opens trace investigation.
         page.locator('.alert-card').first.click();assert page.locator('#alert-dialog').is_visible();page.locator('#alert-investigate').click()
+        assert page.locator('#alerts-panel').is_hidden()
+        assert page.locator('#monitor-view').is_visible()
         assert not page.locator('#live-enabled').is_checked()
         page.locator('#records .operation').first.click();page.locator('#detail pre').wait_for();before=page.locator('#detail').inner_text()
         page.locator('#live-enabled').check();page.wait_for_function('!live.busy');assert page.locator('#detail').inner_text()==before
         page.locator('#live-enabled').uncheck()
-        svg=page.locator('#latency-chart svg');svg.focus();svg.press('ArrowRight');svg.press('Enter');page.wait_for_function('!state.busy');assert not page.locator('#live-enabled').is_checked()
+        # Rolling 24h triggers both metrics and trace requests with a 24h window.
+        alerts_before=counts.get('/api/ai/alerts',0)
+        with page.expect_response('**/api/ai/dashboard?*'):
+            page.locator('#last-day').click()
+        page.wait_for_function('!state.busy')
+        for endpoint in ['/api/ai/dashboard','/api/ai/traces']:
+            q=queries[endpoint]
+            assert (datetime.fromisoformat(q['end'])-datetime.fromisoformat(q['start'])).total_seconds()==86400
+        assert counts.get('/api/ai/alerts',0)==alerts_before
+        assert page.locator('#latency-chart svg').count()==1
+        assert not page.locator('#live-enabled').is_checked()
+        # The calendar day preset also loads automatically on the monitoring page.
+        page.locator('#start').fill('2026-09-29T11:00')
+        with page.expect_response('**/api/ai/dashboard?*'):
+            page.locator('#whole-day').click()
+        page.wait_for_function('!state.busy')
+        assert queries['/api/ai/dashboard']['start']=='2026-09-29T00:00:00+05:00'
+        assert queries['/api/ai/dashboard']['end']=='2026-09-30T00:00:00+05:00'
+        with page.expect_response('**/api/ai/dashboard?*'):
+            page.locator('#last-hour').click()
+        page.wait_for_function('!state.busy')
+        page.locator('#overview').evaluate("e => e.scrollIntoView({block:'start',behavior:'instant'})")
+        page.screenshot(path='/tmp/ibatyr-monitor-page.png',full_page=False)
+        svg=page.locator('#latency-chart svg');svg.focus();svg.press('ArrowLeft');svg.press('Enter');page.wait_for_function('!state.busy')
+        assert not page.locator('#live-enabled').is_checked()
         page.locator('#latency-chart .chart-toggles button').last.click();assert page.locator('#latency-chart .chart-toggles button').last.get_attribute('aria-pressed')=='false'
-        page.locator('#alert-severity').select_option('ALL');page.locator('.alert-card.unknown').first.wait_for()
-        # Inspect actual point values, then drag a range instead of clicking one minute.
+        with page.expect_response('**/api/ai/dashboard?*'):
+            page.locator('#last-hour').click()
+        page.wait_for_function('!state.busy')
         svg=page.locator('#traffic-chart svg');svg.scroll_into_view_if_needed();rect=svg.bounding_box()
         page.mouse.move(rect['x']+rect['width']*.5,rect['y']+rect['height']*.4)
         assert page.locator('#traffic-chart .chart-floating-tip').is_visible()
@@ -84,13 +121,12 @@ try:
         page.wait_for_function('!state.busy')
         selected_minutes=page.evaluate("(Date.parse(state.query.end)-Date.parse(state.query.start))/60000")
         assert 10<selected_minutes<30,selected_minutes
-        page.locator('#overview').scroll_into_view_if_needed()
-
         fail_dashboard=True;page.locator('#refresh-now').click();page.wait_for_function('!live.busy');assert 'Нет свежих данных' in page.locator('#live-status').inner_text();assert page.locator('#latency-chart svg').count()==1
         fail_dashboard=False
         # Editing a date pauses polling and prevents stale requests from overwriting filters.
         page.locator('#start').fill('2026-09-20T09:00');page.locator('#start').dispatch_event('change');assert not page.locator('#live-enabled').is_checked()
         page.locator('#theme-toggle').click();assert page.locator('html').get_attribute('data-theme')=='light';page.locator('#theme-toggle').click()
+        page.locator('#last-hour').click();page.wait_for_function('!state.busy')
         for width in [1500,800,390]:
             page.set_viewport_size({'width':width,'height':1100})
             assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'),f'Overflow {width}'
@@ -98,10 +134,27 @@ try:
                 assert page.locator('.alerts-shortcut').is_visible()
                 page.locator('.alerts-shortcut').click()
                 assert page.url.endswith('#alerts-panel')
+                assert page.locator('#monitor-view').is_hidden()
+                page.locator('.alerts-shortcut').click()
+                assert page.url.endswith('#overview')
+                assert page.locator('#alerts-panel').is_hidden()
         page.set_viewport_size({'width':1500,'height':1100});page.screenshot(path='/tmp/ibatyr-live-desktop.png',full_page=True)
         page.set_viewport_size({'width':390,'height':844});page.screenshot(path='/tmp/ibatyr-live-mobile.png',full_page=True)
         page.locator('#logout').click();page.locator('#login-screen').wait_for(state='visible');assert page.locator('#alert-list').inner_text()==''
+        # A direct link opens Alerts without fetching the dashboard or traces.
+        counts_before=dict(counts)
+        direct=browser.new_page(viewport={'width':390,'height':844})
+        direct.on('pageerror',lambda e:errors.append(str(e)));direct.route('**/api/ai/**',fixture)
+        direct.goto(f'http://127.0.0.1:{server.server_port}/ai/#alerts-panel')
+        direct.locator('.alert-card').first.wait_for()
+        assert direct.locator('#monitor-view').is_hidden()
+        assert counts.get('/api/ai/dashboard',0)==counts_before.get('/api/ai/dashboard',0)
+        assert counts.get('/api/ai/traces',0)==counts_before.get('/api/ai/traces',0)
+        direct.locator('#refresh-now').click();direct.wait_for_function('!live.busy')
+        assert counts.get('/api/ai/dashboard',0)==counts_before.get('/api/ai/dashboard',0)
+        assert counts.get('/api/ai/traces',0)==counts_before.get('/api/ai/traces',0)
+        direct.screenshot(path='/tmp/ibatyr-alerts-mobile.png',full_page=True)
         assert not errors,errors
         browser.close()
-    print('Browser OK: alerts/drilldown, live pinned trace, chart keyboard/toggles, stale state, history pause, themes, 3 widths, logout; no JS errors.')
+    print('Browser OK: separate pages, calendar-day/24h auto-load, isolated requests, alerts/drilldown, live pinned trace, chart keyboard/toggles, stale state, history pause, themes, 3 widths, logout; no JS errors.')
 finally:server.shutdown()

@@ -1,6 +1,6 @@
 "use strict";
 const $ = id => document.getElementById(id);
-const state = {license: null, licenseVersion: 0, page: 1, query: null, result: null, listVersion: 0, detailVersion: 0, selected: null, detail: null, tab: 'sql', busy: false, listController: null, detailController: null, csrf: '', providers: [], provider: 'external', aiVersion: 0, snapshot: null, dashboardVersion: 0, dashboardController: null};
+const state = {view: 'monitor', license: null, licenseVersion: 0, page: 1, query: null, result: null, listVersion: 0, detailVersion: 0, selected: null, detail: null, tab: 'sql', busy: false, listController: null, detailController: null, csrf: '', providers: [], provider: 'external', aiVersion: 0, snapshot: null, dashboardVersion: 0, dashboardController: null};
 function el(tag, text, className) { const n = document.createElement(tag); if(text !== undefined && text !== null) n.textContent = String(text); if(className) n.className = className; return n; }
 function duration(ms) { if(!Number.isFinite(Number(ms))) return '—'; ms=Number(ms); if(ms<1000) return `${ms.toLocaleString('ru-RU')} мс`; if(ms<60000) return `${(ms/1000).toLocaleString('ru-RU',{maximumFractionDigits:3})} с`; return `${Math.floor(ms/60000)} мин ${(ms%60000/1000).toLocaleString('ru-RU',{maximumFractionDigits:1})} с`; }
 function dateText(iso) { return iso ? String(iso).replace('T',' ').replace(/\.\d+/, '') : '—'; }
@@ -16,26 +16,30 @@ async function api(path, controller = new AbortController(), options = {}) {
     return data;
   } finally { clearTimeout(timer); }
 }
-function setBusy(value) { state.busy=value; $('search').disabled=value||!$('service').value; $('search').textContent=value?'Загрузка…':'Обновить обзор'; updatePager(); }
+function setBusy(value) { state.busy=value; $('search').disabled=value||(state.view!=='alerts'&&!$('service').value); $('search').textContent=value?'Загрузка…':state.view==='alerts'?'Обновить алерты':'Обновить обзор'; updatePager(); }
 function updatePager() { $('previous').disabled=state.busy||!state.result||state.page<=1; $('next').disabled=state.busy||!state.result||!state.result.pagination.may_have_more; $('page-label').textContent=`Страница ${state.page}`; }
 function invalidateDetails() { $('export-trace').disabled=true;invalidateAI(); state.detailController?.abort(); state.detailVersion++; state.detail=null; state.selected=null; syncAI(); $('detail').replaceChildren(el('div','Выберите вызов слева','empty detail-empty')); }
-function readQuery() {
+function readPeriod() {
   const start=$('start').value, end=$('end').value, offset=$('timezone').value;
   const addSeconds = value => value.length===16?value+':00':value;
   const from=addSeconds(start)+offset, until=addSeconds(end)+offset;
   const delta=Date.parse(until)-Date.parse(from);
   if(!Number.isFinite(delta)||delta<=0||delta>86400000) throw new Error('Выберите интервал от одной секунды до 24 часов.');
+  return {start:from,end:until};
+}
+function readQuery() {
+  const period=readPeriod();
   const threshold=Number($('threshold').value);
   if(!Number.isInteger(threshold)||threshold<0) throw new Error('Порог должен быть целым неотрицательным числом.');
   if(!$('service').value) throw new Error('Выберите сервис.');
-  return {start:from,end:until,service_id:$('service').value,min_duration_ms:threshold,errors_only:$('errors-only').checked,page_size:20};
+  return {...period,service_id:$('service').value,min_duration_ms:threshold,errors_only:$('errors-only').checked,page_size:20};
 }
 async function search(page, newQuery=false) {
   let query;
-  try { query=newQuery?readQuery():state.query; if(!query) return; } catch(error) { status(error.message,true); return; }
+  try { query=newQuery?readQuery():state.query; if(!query) return; } catch(error) { status(error.message,true);$('live-status').textContent=error.message;return; }
   state.listController?.abort(); const controller=new AbortController(); state.listController=controller;
   const version=++state.listVersion; invalidateDetails(); state.page=page; state.query=query; state.result=null; $('records').replaceChildren(); $('sample-stats').replaceChildren(); $('list-warnings').replaceChildren(); $('period').textContent='Выполняется поиск…';
-  setBusy(true); if(newQuery) {loadDashboard(query); loadAlerts(query,1);} status('Загружаем сохранённые сегменты…');
+  setBusy(true); if(newQuery) {loadDashboard(query);} status('Загружаем сохранённые сегменты…');
   try {
     const params=new URLSearchParams({...query,page});
     const data=await api('/api/ai/traces?'+params,controller); if(version!==state.listVersion) return;
@@ -111,25 +115,27 @@ function renderDetailTab(container) {
     card.id=spanDomId(span);container.append(card);
   }
 }
-$('search-form').addEventListener('submit',event=>{event.preventDefault();pauseLive();search(1,true);});
+$('search-form').addEventListener('submit',event=>{event.preventDefault();pauseLive();cancelViewRequests();refreshCurrent();});
 $('endpoint-filter').addEventListener('input',renderRows);
 $('previous').onclick=()=>{pauseLive();search(state.page-1);};
 $('next').onclick=()=>{pauseLive();search(state.page+1);};
-$('whole-day').onclick=()=>{const day=$('start').value.slice(0,10);if(!day)return;const next=new Date(day+'T00:00:00Z');next.setUTCDate(next.getUTCDate()+1);$('start').value=day+'T00:00';$('end').value=next.toISOString().slice(0,10)+'T00:00';};
+$('whole-day').onclick=()=>applyPreset('day');
+$('last-day').onclick=()=>applyPreset('24h');
 
 function spanDomId(span){return 'span-'+span.segment_id+'-'+span.span_id;}
 function showLogin(){resetLive();state.csrf='';state.license=null;state.licenseVersion++;$('license-dialog').close();$('license-file').value='';$('license-details').replaceChildren();$('license-banner').hidden=true;state.listVersion++;state.dashboardVersion++;state.listController?.abort();state.dashboardController?.abort();invalidateDetails();$('application').hidden=true;$('login-screen').hidden=false;for(const id of ['records','stats','sample-stats','ai-result'])$(id).replaceChildren();$('provider-key').value='';$('preview-json').textContent='';$('preview-system').textContent='';for(const id of ['settings-dialog','preview-dialog'])if($(id).open)$(id).close();}
 async function initialize(){
   $('login-screen').hidden=true;$('application').hidden=false;
   await refreshLicense();
-  try{const [data,profiles]=await Promise.all([api('/api/ai/services'),api('/api/ai/llm/providers')]);$('service').replaceChildren(...data.services.map(s=>{const option=el('option',s.name);option.value=s.id;return option;}));state.providers=profiles.providers;if(!data.services.length){await loadAlerts(readAlertPeriod(),1);scheduleLive();throw new Error('Нет сервисов GENERAL. Алерты по другим объектам доступны; ожидаем трафик агента.');}$('connection').textContent='Сервисы доступны';$('connection').className='pill good';$('search').disabled=false;syncAI();await search(1,true);scheduleLive();}
+  try{const [data,profiles]=await Promise.all([api('/api/ai/services'),api('/api/ai/llm/providers')]);$('service').replaceChildren(...data.services.map(s=>{const option=el('option',s.name);option.value=s.id;return option;}));state.providers=profiles.providers;if(!data.services.length){if(state.view==='alerts')await refreshAlerts();scheduleLive();throw new Error('Нет сервисов GENERAL. Алерты по другим объектам доступны; ожидаем трафик агента.');}$('connection').textContent='Сервисы доступны';$('connection').className='pill good';$('search').disabled=false;syncAI();await refreshCurrent();scheduleLive();}
   catch(error){$('connection').textContent='Нет подключения';$('connection').className='pill bad';status(error.message,true);}
 }
 $('login-form').addEventListener('submit',async event=>{event.preventDefault();$('login-button').disabled=true;$('login-error').textContent='';try{const data=await api('/api/ai/auth/login',new AbortController(),{method:'POST',body:JSON.stringify({username:$('login-name').value,password:$('login-password').value})});state.csrf=data.csrf_token;$('login-password').value='';await initialize();}catch(error){$('login-error').textContent=error.message;}finally{$('login-button').disabled=false;}});
 $('logout').onclick=async()=>{try{await api('/api/ai/auth/logout',new AbortController(),{method:'POST'});showLogin();}catch(error){status(error.message,true);}};
 $('theme-toggle').onclick=()=>{const light=document.documentElement.dataset.theme!=='light';document.documentElement.dataset.theme=light?'light':'dark';try{localStorage.setItem('swai_theme',light?'light':'dark');}catch{}};
 try{document.documentElement.dataset.theme=localStorage.getItem('swai_theme')||'dark';}catch{}
-$('last-hour').onclick=()=>{const [hours,minutes]=$('timezone').value.slice(1).split(':').map(Number);const sign=$('timezone').value[0]==='-'?-1:1;const end=new Date(Date.now()+sign*(hours*60+minutes)*60000-120000);end.setUTCSeconds(0,0);const start=new Date(end-3600000);$('start').value=start.toISOString().slice(0,16);$('end').value=end.toISOString().slice(0,16);};
+function setRollingPeriod(minutes=60){const end=new Date(Math.floor((Date.now()-120000)/60000)*60000);setInputs(new Date(end.getTime()-minutes*60000),end);}
+$('last-hour').onclick=()=>applyPreset('hour');
 
 async function loadDashboard(query,quiet=false){
   state.dashboardController?.abort();const controller=new AbortController();state.dashboardController=controller;const version=++state.dashboardVersion;
@@ -139,7 +145,7 @@ async function loadDashboard(query,quiet=false){
     $('stats').replaceChildren(...metrics.map(([title,value,note])=>{const card=el('div',null,'stat');card.append(el('div',title,'stat-label'),el('div',value,'stat-value'),el('div',note,'stat-foot'));return card;}));
     drawChart('latency-chart',data.points,[['mean_latency_ms','#48bfae','Среднее'],['p95_ms','#a996f5','P95']],'мс');drawChart('traffic-chart',data.points,[['calls_per_minute','#48bfae','Вызовы']],'выз/мин');drawChart('errors-chart',data.points,[['error_rate_percent','#f08b99','Ошибки']],'%');
     $('metric-warnings').replaceChildren(el('p',`Положительная нагрузка: ${data.coverage.minutes_with_positive_traffic} из ${data.coverage.requested_minutes} минут.`),...(data.warnings||[]).map(w=>el('p',w)));if(!quiet){live.lastSuccess=new Date();$('live-status').textContent='Метрики получены '+live.lastSuccess.toLocaleTimeString('ru-RU');}return true;
-  }catch(error){if(version!==state.dashboardVersion)return;if(quiet)return false;$('stats').replaceChildren(el('div','Метрики недоступны: '+error.message,'empty bad-text'));['latency-chart','traffic-chart','errors-chart'].forEach(id=>$(id).replaceChildren(el('div','Нет данных','empty')));}
+  }catch(error){if(version!==state.dashboardVersion)return;if(quiet)return false;$('live-status').textContent='Метрики не загружены: '+(error.name==='AbortError'?'Истекло время ожидания':error.message);$('stats').replaceChildren(el('div','Метрики недоступны: '+error.message,'empty bad-text'));['latency-chart','traffic-chart','errors-chart'].forEach(id=>$(id).replaceChildren(el('div','Нет данных','empty')));}
 }
 function svgNode(tag,attrs={}){const n=document.createElementNS('http://www.w3.org/2000/svg',tag);for(const[k,v]of Object.entries(attrs))n.setAttribute(k,String(v));return n;}
 
@@ -166,5 +172,5 @@ $('license-request').onclick=async()=>{try{const data=await api('/api/ai/license
 $('license-form').onsubmit=async event=>{event.preventDefault();const file=$('license-file').files[0];if(!file)return;if(file.size>20000){$('license-message').textContent='Файл лицензии должен быть не больше 20 КБ.';return;}$('license-activate').disabled=true;const session=state.csrf;try{const result=await api('/api/ai/license/activate',new AbortController(),{method:'POST',body:JSON.stringify({document:await file.text()})});if(!state.csrf||state.csrf!==session)return;state.licenseVersion++;state.license=result;invalidateAI();renderLicense();$('license-message').textContent='Лицензия активирована.';$('license-file').value='';}catch(e){if(state.csrf===session)$('license-message').textContent=e.message;}finally{$('license-activate').disabled=false;}};
 $('export-trace').onclick=()=>{if(state.detail)downloadJSON('ibatyr-trace.json',state.detail);};
 setInterval(()=>{if(state.csrf&&!document.hidden)refreshLicense();},60000);
-$('last-hour').click();
+
 
