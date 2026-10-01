@@ -1,7 +1,7 @@
 "use strict";
 const live = {timer:null, busy:false, generation:0, alertVersion:0, alertController:null, alertPage:1, alerts:null, lastSuccess:null, failures:0, lastServices:0, hidden:{}};
 function pauseLive(){ $('live-enabled').checked=false;clearTimeout(live.timer);live.generation++;$('live-label').textContent='Исторический просмотр';$('live-dot').classList.remove('on'); }
-function resetLive(){pauseLive();live.alertVersion++;live.alertController?.abort();live.alerts=null;live.lastSuccess=null;$('alert-dialog').close();$('alert-detail').replaceChildren();$('alert-list').replaceChildren();$('alert-count').textContent='—';$('alert-status').textContent='Ожидаем данные OAP.';}
+function resetLive(){pauseLive();live.alertVersion++;live.alertController?.abort();$('alerts-refresh').disabled=false;$('alerts-panel').setAttribute('aria-busy','false');live.alerts=null;live.lastSuccess=null;$('alert-dialog').close();$('alert-detail').replaceChildren();$('alert-list').replaceChildren();$('alert-count').textContent='—';$('alert-status').textContent='Ожидаем данные OAP.';}
 function scheduleLive(){clearTimeout(live.timer);const enabled=$('live-enabled').checked;$('live-label').textContent=enabled?'LIVE · последний час':'Исторический просмотр';$('live-dot').classList.toggle('on',enabled&&!document.hidden);if(enabled&&state.csrf&&!document.hidden)live.timer=setTimeout(refreshLive,Number($('live-interval').value)*1000*Math.min(4,1+live.failures));}
 function setInputs(start,end){const value=$('timezone').value;const sign=value[0]==='-'?-1:1;const [h,m]=value.slice(1).split(':').map(Number);const offset=sign*(h*60+m)*60000;for(const[id,date]of [['start',start],['end',end]])$(id).value=new Date(date.getTime()+offset).toISOString().slice(0,16);}
 function readAlertPeriod(){const offset=$('timezone').value;return {start:$('start').value+':00'+offset,end:$('end').value+':00'+offset};}
@@ -27,12 +27,13 @@ async function refreshLive(){
 }
 async function loadAlerts(query,page=1){
   live.alertController?.abort();const c=new AbortController();live.alertController=c;const v=++live.alertVersion;live.alertPage=page;
-  $('alert-prev').disabled=true;$('alert-next').disabled=true;
+  $('alert-prev').disabled=true;$('alert-next').disabled=true;$('alerts-refresh').disabled=true;$('alerts-panel').setAttribute('aria-busy','true');
   try{
     const data=await api('/api/ai/alerts?'+new URLSearchParams({start:query.start,end:query.end,severity:$('alert-severity').value,page,page_size:12}),c);
     if(v!==live.alertVersion||!state.csrf)return false;
     live.alerts=data;renderAlerts();return true;
   }catch(e){if(v===live.alertVersion){$('alert-status').textContent='Алерты недоступны; предыдущий список может быть устаревшим. '+e.message;$('alert-status').classList.add('error');}return false;}
+  finally{if(v===live.alertVersion){$('alerts-refresh').disabled=false;$('alerts-panel').setAttribute('aria-busy','false');}}
 }
 function renderAlerts(){
   const d=live.alerts;$('alert-status').classList.remove('error');$('alert-status').textContent='Получено '+new Date(d.fetched_at).toLocaleTimeString('ru-RU')+' · '+dateText(d.period.start)+' → '+dateText(d.period.end_exclusive);
@@ -69,10 +70,11 @@ function drawChart(id,points,series,unit){
   svg.addEventListener('pointermove',e=>{const r=svg.getBoundingClientRect();focus(Math.round(((e.clientX-r.left)/r.width*W-L)/(W-L-R)*(points.length-1)));});svg.addEventListener('click',select);svg.addEventListener('keydown',e=>{if(['ArrowLeft','ArrowRight','Enter'].includes(e.key)){e.preventDefault();if(e.key==='Enter')select();else focus(index+(e.key==='ArrowRight'?1:-1));}});box.append(svg,tip);
 }
 $('live-enabled').onchange=()=>{live.generation++;if($('live-enabled').checked)refreshLive();else pauseLive();scheduleLive();};$('live-interval').onchange=scheduleLive;$('refresh-now').onclick=refreshLive;
-for(const id of ['start','end','timezone','service','threshold','errors-only'])$(id).addEventListener('change',()=>{pauseLive();state.dashboardVersion++;state.dashboardController?.abort();live.alertVersion++;live.alertController?.abort();state.listVersion++;state.listController?.abort();setBusy(false);$('live-status').textContent='Фильтры изменены — нажмите «Обновить обзор»';});
+for(const id of ['start','end','timezone','service','threshold','errors-only'])$(id).addEventListener('change',()=>{pauseLive();state.dashboardVersion++;state.dashboardController?.abort();live.alertVersion++;live.alertController?.abort();$('alerts-refresh').disabled=false;$('alerts-panel').setAttribute('aria-busy','false');state.listVersion++;state.listController?.abort();setBusy(false);$('live-status').textContent='Фильтры изменены — нажмите «Обновить обзор»';});
 $('whole-day').addEventListener('click',pauseLive);
-$('alert-severity').onchange=()=>{loadAlerts(state.query||readAlertPeriod(),1);};
-$('alert-prev').onclick=()=>{pauseLive();if(state.query)loadAlerts(state.query,live.alertPage-1);};$('alert-next').onclick=()=>{pauseLive();if(state.query)loadAlerts(state.query,live.alertPage+1);};$('alert-close').onclick=()=>$('alert-dialog').close();
+$('alerts-refresh').onclick=()=>loadAlerts(readAlertPeriod(),1);
+$('alert-severity').onchange=()=>loadAlerts(readAlertPeriod(),1);
+$('alert-prev').onclick=()=>{pauseLive();loadAlerts(live.alerts?.period?{start:live.alerts.period.start,end:live.alerts.period.end_exclusive}:readAlertPeriod(),live.alertPage-1);};$('alert-next').onclick=()=>{pauseLive();loadAlerts(live.alerts?.period?{start:live.alerts.period.start,end:live.alerts.period.end_exclusive}:readAlertPeriod(),live.alertPage+1);};$('alert-close').onclick=()=>$('alert-dialog').close();
 document.addEventListener('visibilitychange',()=>{if(document.hidden){clearTimeout(live.timer);$('live-dot').classList.remove('on');$('live-status').textContent='Автообновление приостановлено: вкладка скрыта';}else if($('live-enabled').checked)refreshLive();});
 
 (async()=>{try{const session=await api('/api/ai/auth/session');state.csrf=session.csrf_token;await initialize();}catch{showLogin();}})();

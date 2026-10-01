@@ -51,6 +51,16 @@ try:
         page.goto(f'http://127.0.0.1:{server.server_port}/ai/')
         page.locator('.alert-card').first.wait_for();page.locator('#latency-chart svg').wait_for()
         assert page.locator('.alert-card').count()==3
+        page.locator('.alerts-nav').click();assert page.url.endswith('#alerts-panel')
+        page.locator('#live-enabled').uncheck()
+        dashboard_before=counts.get('/api/ai/dashboard',0)
+        traces_before=counts.get('/api/ai/traces',0)
+        with page.expect_response('**/api/ai/alerts?*'):
+            page.locator('#alerts-refresh').click()
+        page.wait_for_function("!document.getElementById('alerts-refresh').disabled")
+        assert counts.get('/api/ai/dashboard',0)==dashboard_before
+        assert counts.get('/api/ai/traces',0)==traces_before
+        page.evaluate('window.scrollTo(0,0)')
         page.screenshot(path='/tmp/ibatyr-live-showcase.png',full_page=False)
         page.locator('.alert-card').first.click();assert page.locator('#alert-dialog').is_visible();page.locator('#alert-investigate').click()
         assert not page.locator('#live-enabled').is_checked()
@@ -68,6 +78,10 @@ try:
         for width in [1500,800,390]:
             page.set_viewport_size({'width':width,'height':1100})
             assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'),f'Overflow {width}'
+            if width==390:
+                assert page.locator('.alerts-shortcut').is_visible()
+                page.locator('.alerts-shortcut').click()
+                assert page.url.endswith('#alerts-panel')
         page.set_viewport_size({'width':1500,'height':1100});page.screenshot(path='/tmp/ibatyr-live-desktop.png',full_page=True)
         page.set_viewport_size({'width':390,'height':844});page.screenshot(path='/tmp/ibatyr-live-mobile.png',full_page=True)
         page.locator('#logout').click();page.locator('#login-screen').wait_for(state='visible');assert page.locator('#alert-list').inner_text()==''
