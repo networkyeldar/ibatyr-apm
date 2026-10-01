@@ -25,3 +25,5 @@ packages/*
 storage.json
 *.jks
 es-install-backup/
+
+users.sqlite3*

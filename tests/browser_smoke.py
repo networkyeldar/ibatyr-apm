@@ -15,6 +15,7 @@ class Handler(SimpleHTTPRequestHandler):
     def log_message(self,*args):pass
 
 server=ThreadingHTTPServer(('127.0.0.1',0),Handler);Thread(target=server.serve_forever,daemon=True).start()
+fixture_users=[{'id':'admin1','username':'devadmin','role':'admin','active':True}]
 counts={};queries={};fail_dashboard=False;missing_jvm=False;fail_llm=False
 
 def fixture(route):
@@ -24,7 +25,15 @@ def fixture(route):
     base=datetime.fromisoformat(start);queries[p]=q
     minute_count=max(1,int((datetime.fromisoformat(end)-base).total_seconds()/60))
     data={}
-    if p.endswith('/auth/session'):data={'csrf_token':'fixture-csrf'}
+    if p.endswith('/auth/session'):data={'csrf_token':'fixture-csrf','user_id':'admin1','username':'devadmin','role':'admin'}
+    elif p.endswith('/admin/audit'):data={'events':[]}
+    elif p.endswith('/admin/users'):
+        if route.request.method=='POST':
+            body=route.request.post_data_json;data={'id':'operator1','username':body['username'],'role':body['role'],'active':True};fixture_users.append(data);queries[p]=body
+        else:data={'users':fixture_users}
+    elif '/admin/users/' in p:
+        body=route.request.post_data_json;queries[p]=body
+        data=next(u for u in fixture_users if u['id']==p.rsplit('/',1)[-1]);data.update(body)
     elif p.endswith('/auth/logout'):data={'ok':True}
     elif p.endswith('/license'):data={'status':'active','ai_enabled':True,'days_remaining':30,'message':'Тестовая лицензия','installation_id':'fixture'}
     elif p.endswith('/license/history'):data={'events':[]}
@@ -66,6 +75,25 @@ try:
         page.goto(f'http://127.0.0.1:{server.server_port}/ai/')
         page.locator('#latency-chart svg').wait_for()
         assert page.locator('#alerts-panel').is_hidden()
+        assert page.locator('#settings-nav').inner_text().strip()=='Подключения AI'
+        page.locator('#users-nav').click();page.locator('#users-list tr').wait_for()
+        page.locator('#user-name').fill('operator')
+        page.locator('#user-password').fill('fixture-password-2026')
+        with page.expect_response('**/api/ai/admin/users'):
+            page.locator('#user-create-form .primary').click()
+        page.wait_for_function('!adminBusy')
+        assert page.locator('#users-list tr').count()==2
+        assert page.locator('#user-password').input_value()==''
+        page.locator('#users-list tr').last.locator('button').click()
+        page.locator('#user-active').uncheck()
+        page.locator('#user-edit-form .primary').click();page.wait_for_function('!adminBusy')
+        assert 'Заблокирован' in page.locator('#users-list').inner_text()
+        page.locator('#users-dialog').screenshot(path='/tmp/ibatyr-users-panel.png')
+        page.locator('#users-close').click()
+        page.evaluate("applyIdentity({role:'user',username:'operator',user_id:'operator1'})")
+        assert page.locator('#users-nav').is_hidden() and page.locator('#settings-nav').is_hidden()
+        page.evaluate("applyIdentity({role:'admin',username:'devadmin',user_id:'admin1'})")
+
         assert counts.get('/api/ai/alerts',0)==0
         page.locator('#settings-nav').click()
         assert page.locator('#provider-response-format').input_value()=='auto'
@@ -81,6 +109,12 @@ try:
         assert page.url.endswith('#alerts-panel')
         assert page.locator('#monitor-view').is_hidden()
         assert page.locator('.alert-card').count()==3
+        assert page.locator('#alert-list > li').count()==3
+        rows=page.locator('.alert-card').all()
+        boxes=[row.bounding_box() for row in rows]
+        assert all(abs(b['x']-boxes[0]['x'])<1 and abs(b['width']-boxes[0]['width'])<1 for b in boxes)
+        assert boxes[1]['y']>=boxes[0]['y']+boxes[0]['height']
+
         page.locator('#live-enabled').uncheck()
         dashboard_before=counts.get('/api/ai/dashboard',0)
         traces_before=counts.get('/api/ai/traces',0)

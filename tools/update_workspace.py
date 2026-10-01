@@ -12,7 +12,7 @@ import time
 from urllib.request import urlopen
 
 SOURCE = Path(__file__).resolve().parents[1] / 'shell'
-FILES = ('ai_routes.py', 'ai_evidence.py', 'dashboard_routes.py', 'jvm_routes.py', 'analysis_reports.py', 'report_evidence.py', 'report_pdf.py', 'requirements.txt')
+FILES = ('ai_security.py', 'ai_users.py', 'ai_routes.py', 'ai_evidence.py', 'dashboard_routes.py', 'jvm_routes.py', 'analysis_reports.py', 'report_evidence.py', 'report_pdf.py', 'requirements.txt')
 DIRECTORIES = ('ai_web', 'report_fonts')
 
 
@@ -82,7 +82,7 @@ def main():
             run('systemctl','start','ibatyr-apm.service')
             ready(args.port)
             with urlopen(f'http://127.0.0.1:{args.port}/ai/',timeout=5) as r:
-                if 'v=5.0-blocks-1' not in r.read().decode():
+                if 'v=5.0-users-1' not in r.read().decode():
                     raise RuntimeError('Сервер отдаёт другую версию интерфейса')
         except Exception:
             print('Обновление не прошло проверку. Возвращаем предыдущие файлы.',flush=True)

@@ -7,7 +7,7 @@ version=manifest()['product_version'];out=ROOT/'packages';out.mkdir(exist_ok=Tru
 
 def copy(source,dest):
     source=ROOT/source
-    if source.is_dir():shutil.copytree(source,dest,ignore=shutil.ignore_patterns('__pycache__','.venv','.*','*.pem','*license.json','*settings.json'))
+    if source.is_dir():shutil.copytree(source,dest,ignore=shutil.ignore_patterns('__pycache__','.venv','.*','*.pem','*license.json','*settings.json','users.sqlite3*'))
     else:shutil.copy2(source,dest)
 
 for component in ['shell','server','agent']:

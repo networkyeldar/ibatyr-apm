@@ -8,10 +8,11 @@ import tempfile
 import time
 from pathlib import Path
 from urllib.parse import urlsplit
+from typing import Literal
 
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr
 
 CONFIG_PATH = Path(os.environ.get("SW_AI_CONFIG", str(Path(__file__).with_name(".ai_settings.json"))))
 COOKIE = "swai_session"
@@ -41,6 +42,29 @@ class Login(BaseModel):
     password: str = Field(min_length=1, max_length=1024)
 
 
+class CreateUser(BaseModel):
+    username: str = Field(min_length=1, max_length=100, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.@-]*$")
+    password: SecretStr
+    role: Literal["admin", "user"] = "user"
+
+
+class UpdateUser(BaseModel):
+    role: Literal["admin", "user"] | None = None
+    active: bool | None = None
+
+
+class ResetPassword(BaseModel):
+    password: SecretStr
+
+
+async def new_credentials(secret):
+    value = secret.get_secret_value()
+    if not 12 <= len(value) <= 1024:
+        raise HTTPException(422, "Пароль должен содержать от 12 до 1024 символов")
+    salt = secrets.token_hex(16)
+    return salt, await asyncio.to_thread(password_hash, value, salt)
+
+
 class Security:
     def __init__(self, path=CONFIG_PATH):
         self.path = Path(path)
@@ -50,6 +74,8 @@ class Security:
         if not self.config.get("password_hash") or not self.config.get("password_salt"):
             raise RuntimeError("Не настроен пароль приложения. Выполните setup_ai.py")
         os.chmod(self.path, 0o600)
+        from ai_users import Users
+        self.users = Users(self.path.with_name("users.sqlite3"), self.config)
         self.sessions = {}
         self.failures = {}
 
@@ -58,6 +84,10 @@ class Security:
         key = hashlib.sha256(token.encode()).hexdigest()
         item = self.sessions.get(key)
         if not item or item["expires"] <= time.time():
+            self.sessions.pop(key, None)
+            return None
+        user = self.users.get(item["user_id"])
+        if not user or not user['active'] or user['version'] != item['user_version']:
             self.sessions.pop(key, None)
             return None
         return item
@@ -71,6 +101,11 @@ class Security:
                 if not session:
                     return JSONResponse({"detail": "Требуется вход"}, status_code=401)
                 request.state.ai_session = session
+                admin_only = (path.startswith("/api/ai/admin/") or
+                              (path.startswith("/api/ai/llm/providers/") and request.method not in ("GET", "HEAD")) or
+                              path in ("/api/ai/license/activate", "/api/ai/license/request", "/api/ai/license/history"))
+                if admin_only and session["role"] != "admin":
+                    return JSONResponse({"detail": "Требуются права администратора"}, status_code=403)
                 if request.method not in ("GET", "HEAD", "OPTIONS"):
                     csrf = request.headers.get("X-CSRF-Token", "")
                     if not hmac.compare_digest(csrf, session["csrf"]):
@@ -96,8 +131,12 @@ class Security:
             recent = [t for t in self.failures.get(identity, []) if now - t < 60]
             if len(recent) >= 5:
                 raise HTTPException(429, "Слишком много попыток. Подождите минуту.")
-            computed = await asyncio.to_thread(password_hash, body.password, self.config["password_salt"])
-            if not (hmac.compare_digest(computed, self.config["password_hash"]) and hmac.compare_digest(body.username.encode(), self.config["username"].encode())):
+            user = self.users.get(body.username, by_name=True)
+            salt = user['salt'] if user else self.config['password_salt']
+            computed = await asyncio.to_thread(password_hash, body.password, salt)
+            latest = self.users.get(user['id']) if user else None
+            if not (user and latest and latest['active'] and latest['version'] == user['version']
+                    and hmac.compare_digest(computed, user['password_hash'])):
                 self.failures[identity] = recent + [now]
                 raise HTTPException(401, "Неверный логин или пароль")
             self.failures.pop(identity, None)
@@ -105,14 +144,14 @@ class Security:
             if len(self.sessions) >= 100:
                 self.sessions.pop(next(iter(self.sessions)))
             token, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
-            self.sessions[hashlib.sha256(token.encode()).hexdigest()] = {"csrf": csrf, "expires": now + SESSION_SECONDS, "id": secrets.token_hex(16)}
-            response = JSONResponse({"username": self.config["username"], "csrf_token": csrf})
+            self.sessions[hashlib.sha256(token.encode()).hexdigest()] = {"csrf": csrf, "expires": now + SESSION_SECONDS, "id": secrets.token_hex(16), "user_id": user["id"], "user_version": user["version"], "username": user["username"], "role": user["role"]}
+            response = JSONResponse({"username": user["username"], "user_id": user["id"], "role": user["role"], "csrf_token": csrf})
             response.set_cookie(COOKIE, token, httponly=True, samesite="strict", secure=os.environ.get("SW_AI_COOKIE_SECURE") == "1", max_age=SESSION_SECONDS, path="/")
             return response
 
         @app.get("/api/ai/auth/session")
         async def session(request: Request):
-            return {"username": self.config["username"], "csrf_token": request.state.ai_session["csrf"]}
+            return {k: request.state.ai_session[k] for k in ("username", "user_id", "role")} | {"csrf_token": request.state.ai_session["csrf"]}
 
         @app.post("/api/ai/auth/logout")
         async def logout(request: Request):
@@ -121,3 +160,32 @@ class Security:
             response = JSONResponse({"status": "ok"})
             response.delete_cookie(COOKIE, path="/")
             return response
+
+        @app.get("/api/ai/admin/users")
+        async def users():
+            return {"users": self.users.list()}
+
+        @app.get("/api/ai/admin/audit")
+        async def audit():
+            return {"events": self.users.events()}
+
+        @app.post("/api/ai/admin/users", status_code=201)
+        async def create_user(body: CreateUser, request: Request):
+            salt, digest = await new_credentials(body.password)
+            if not self.session(request):
+                raise HTTPException(401, "Сессия завершена. Войдите заново.")
+            return self.users.create(request.state.ai_session['user_id'], body.username, body.role, salt, digest)
+
+        @app.patch("/api/ai/admin/users/{uid}")
+        async def update_user(uid: str, body: UpdateUser, request: Request):
+            if body.role is None and body.active is None:
+                raise HTTPException(422, "Укажите роль или состояние пользователя")
+            return self.users.update(request.state.ai_session['user_id'], uid, body.role, body.active)
+
+        @app.post("/api/ai/admin/users/{uid}/password")
+        async def reset_password(uid: str, body: ResetPassword, request: Request):
+            credentials = await new_credentials(body.password)
+            if not self.session(request):
+                raise HTTPException(401, "Сессия завершена. Войдите заново.")
+            self.users.update(request.state.ai_session['user_id'], uid, credentials=credentials)
+            return {"status": "ok", "sessions_revoked": True}

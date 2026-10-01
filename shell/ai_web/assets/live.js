@@ -42,8 +42,12 @@ function renderAlerts(){
   $('alert-count').textContent=d.records.length+' на странице';$('alert-page').textContent='Страница '+d.pagination.page;
   $('alert-prev').disabled=d.pagination.page<=1;$('alert-next').disabled=!d.pagination.may_have_more;
   const names={CRITICAL:'Критичный',HIGH:'Высокий',WARNING:'Предупреждение',INFO:'Информация',UNKNOWN:'Уровень неизвестен'};
-  const cards=d.records.map(a=>{const b=el('button',null,'alert-card '+a.severity.toLowerCase());b.type='button';const h=el('div',null,'alert-heading');h.append(badge(names[a.severity],a.severity==='CRITICAL'?'bad':''),el('time',dateText(a.time),'muted small'));b.append(h,el('strong',a.message),el('span',(a.scope||'Объект')+' · '+a.entity_id,'muted small'));b.onclick=()=>openAlarm(a);return b;});
-  if(!cards.length)cards.push(el('div','На этой странице нет срабатываний выбранного уровня. Проверьте период и теги правил; это не подтверждение отсутствия проблем.','empty'));
+  const cards=d.records.map(a=>{const row=el('li'),b=el('button',null,'alert-card '+a.severity.toLowerCase());b.type='button';
+    const level=el('span',null,'alert-level');level.append(badge(names[a.severity]||names.UNKNOWN,a.severity==='CRITICAL'?'bad':''));
+    const time=el('time',dateText(a.time),'alert-time muted small');time.dateTime=a.time;
+    b.append(level,time,el('strong',a.message,'alert-message'),el('span',(a.scope||'Объект')+' · '+a.entity_id,'alert-entity muted small'),el('span','›','alert-arrow'));
+    b.onclick=()=>openAlarm(a);row.append(b);return row;});
+  if(!cards.length)cards.push(el('li','На этой странице нет срабатываний выбранного уровня. Проверьте период и теги правил; это не подтверждение отсутствия проблем.','empty'));
   $('alert-list').replaceChildren(...cards);
 }
 function openAlarm(a){
@@ -202,4 +206,4 @@ window.addEventListener('hashchange',()=>showView());
 showView(location.hash,false);
 
 setRollingPeriod(60);
-(async()=>{try{const session=await api('/api/ai/auth/session');state.csrf=session.csrf_token;await initialize();}catch{showLogin();}})();
+(async()=>{try{const session=await api('/api/ai/auth/session');state.csrf=session.csrf_token;applyIdentity(session);await initialize();}catch{showLogin();}})();

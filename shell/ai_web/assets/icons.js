@@ -1,6 +1,7 @@
 "use strict";
 // Original inline SVG icons; no remote font, CDN or tracking request.
 const iconPaths={
+ users:['M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2','M9 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8','M20 8v6m-3-3h6'],
  overview:['M3 3h7v7H3z','M14 3h7v7h-7z','M3 14h7v7H3z','M14 14h7v7h-7z'],
  alerts:['M12 3 2 21h20L12 3Z','M12 9v5','M12 18h.01'],
  jvm:['M7 7h10v10H7z','M9 1v4m6-4v4M9 19v4m6-4v4M1 9h4m-4 6h4m14-6h4m-4 6h4'],
@@ -17,6 +18,6 @@ const iconPaths={
  clock:['M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18','M12 7v5l4 2'],
 };
 function sectionIcon(name){const svg=svgNode('svg',{viewBox:'0 0 24 24',class:'section-icon','aria-hidden':'true'});for(const d of iconPaths[name]||iconPaths.overview)svg.append(svgNode('path',{d}));return svg;}
-for(const[selector,key,label]of [['a[href="#overview"]','overview','Обзор'],['.alerts-nav','alerts','Алерты'],['.jvm-nav','jvm','JVM'],['a[href="#explorer"]','trace','Трассировки'],['#settings-nav','settings','Подключения'],['#license-nav','license','Лицензия']]){const node=document.querySelector('.rail '+selector);if(node)node.replaceChildren(sectionIcon(key),el('span',label));}
+for(const[selector,key,label]of [['a[href="#overview"]','overview','Обзор'],['.alerts-nav','alerts','Алерты'],['.jvm-nav','jvm','JVM'],['a[href="#explorer"]','trace','Трассировки'],['#settings-nav','settings','Подключения AI'],['#license-nav','license','Лицензия'],['#users-nav','users','Пользователи']]){const node=document.querySelector('.rail '+selector);if(node)node.replaceChildren(sectionIcon(key),el('span',label));}
 for(const card of document.querySelectorAll('.chart-card')){const id=card.querySelector('.plot')?.id||'',title=card.querySelector('h3');const key=/cpu/.test(id)?'cpu':/memory|nonheap/.test(id)?'memory':/blocked/.test(id)?'blocked':/threads/.test(id)?'threads':/gc/.test(id)?'gc':/classes/.test(id)?'classes':/latency/.test(id)?'clock':/errors/.test(id)?'alerts':'cpu';if(title)title.prepend(sectionIcon(key));}
 for(const[id,key]of [['alerts-title','alerts'],['jvm-title','jvm'],['report-title','ai']]){const node=$(id);if(node){node.querySelector('.alerts-symbol')?.remove();node.prepend(sectionIcon(key));}}
