@@ -1,16 +1,24 @@
-# iBatyr APM 0.4.0-rc1
+# iBatyr APM 0.5.0-rc1
 
-- Самостоятельный backend вместо зависимости от legacy main.py.
-- Установщики shell/server/agent для Ubuntu 24.04; Docker не требуется.
-- Проверка занятых портов и запрет перезаписи existing deployment.
-- Подключение к существующему OAP или новая OAP 10.1.0 с внешним ES / demo H2.
-- Agent package 9.3.0, без автоматического рестарта JVM клиента.
-- Три дистрибутива, контрольные суммы, CI и ручной draft release workflow.
-- Сохранены dashboard, auth/CSRF, AI preview, offline trial/paid.
+- Алерты OAP: CRITICAL/HIGH/WARNING, все уровни, детали, фильтр времени и пагинация.
+- Live-обзор: 15/30/60 секунд, скользящий час, пауза при историческом исследовании,
+  сохранение выбранного trace и явная отметка устаревших данных при ошибке.
+- Интерактивные графики: tooltip, crosshair, переключение рядов, клавиатура и drilldown.
+- Новый first-install Elasticsearch 8: APT с проверенным ключом, HTTPS/auth,
+  loopback, постоянные данные, отдельный пользователь OAP и JKS truststore.
+- Пошаговая docs/ELASTICSEARCH.md, правила алертов и docs/ALERTS.md.
 
-Это RC для стенда. Результаты и непройденные проверки: docs/VALIDATION.md.
-Архивные upstream-версии зафиксированы для воспроизводимости, не объявлены
-актуальными безопасными версиями. Review зависимостей и upgrade policy нужны до продажи.
+Совместимость: OAP 10.1.0, Java agent 9.3.0, Ubuntu 24.04/Python 3.12, Java 17 для OAP.
+Конкретную версию Elasticsearch 8.x.y выбирают явно; полная установка и совместимость
+с OAP должны пройти приёмку на целевой VM. Elasticsearch не включён в архив:
+установщик загружает пакет из официального APT. Этот RC не является обновлением
+существующего ES/OAP и не перезаписывает их конфигурацию.
 
-Проверено: 29 unit/integration tests; browser со stub OAP; systemd unit syntax;
-реальный OAP 10.1.0 + GraphQL; запуск агента 9.3.0 с Java 17 и получение JDBC spans.
+Пакеты server/agent включают фиксированные upstream-архивы, если собраны
+с --with-vendor. Shell требует PyPI. AI-лицензирование не менялось.
+
+Для существующего monitoring: сначала проверка новой оболочки на отдельной VM;
+правила алертов добавляются с сохранением hooks Wazuh и других интеграций.
+Не запускайте установку Elasticsearch поверх работающего узла.
+
+Перед передачей production-клиенту завершите docs/VALIDATION.md.

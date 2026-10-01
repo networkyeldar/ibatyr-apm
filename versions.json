@@ -1,5 +1,5 @@
 {
-  "product_version": "0.4.0-rc1",
+  "product_version": "0.5.0-rc1",
   "target": "Ubuntu 24.04 / Python 3.12 / Java 17",
   "server": {
     "version": "10.1.0",

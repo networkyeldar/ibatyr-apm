@@ -1,0 +1,24 @@
+# iBatyr baseline for a NEW installation. Review thresholds against client SLOs.
+# Existing deployments: merge rules into existing rules; preserve all hooks.
+rules:
+  ibatyr_service_latency_critical_rule:
+    expression: sum(service_resp_time > 5000) >= 3
+    period: 5
+    silence-period: 5
+    message: 'Service {name}: mean latency exceeded 5000 ms in at least 3 of the last 5 minutes.'
+    tags:
+      level: CRITICAL
+  ibatyr_service_errors_critical_rule:
+    expression: sum(service_sla < 9500) >= 3
+    period: 5
+    silence-period: 5
+    message: 'Service {name}: success rate below 95% in at least 3 of the last 5 minutes. Check traffic volume.'
+    tags:
+      level: CRITICAL
+  ibatyr_database_latency_critical_rule:
+    expression: sum(database_access_resp_time > 5000) >= 3
+    period: 5
+    silence-period: 5
+    message: 'Database access {name}: mean latency exceeded 5000 ms in at least 3 of the last 5 minutes.'
+    tags:
+      level: CRITICAL

@@ -121,6 +121,14 @@ def shell(a):
     wait_url(f'http://127.0.0.1:{a.port}/ready')
     print(f'Готово: http://127.0.0.1:{a.port}/ai/ ; служба ibatyr-apm. Доступ через SSH-туннель.')
 
+def elasticsearch(a):
+    from elastic_install import install
+    install(a, free)
+
+def storage_setup(a):
+    from elastic_install import provision
+    provision()
+
 def server(a):
     target=BASE/'server'/manifest()['server']['version'];env=ETC/'server.env'
     if target.exists() or env.exists() or unit_exists('ibatyr-oap'):raise RuntimeError('Сервер уже установлен; перезапись запрещена')
@@ -131,6 +139,14 @@ def server(a):
     if not java:raise RuntimeError('Установите openjdk-17-jre-headless')
     out=subprocess.run([java,'-version'],capture_output=True,text=True).stderr
     if not re.search(r'version "17\.',out):raise RuntimeError('Для этого пакета нужен Java 17; проверьте java -version')
+    local_storage = None
+    if a.local_elasticsearch:
+        if a.storage!='elasticsearch' or a.es_nodes or a.es_user:
+            raise RuntimeError('--local-elasticsearch используется только с --storage elasticsearch, без --es-nodes/--es-user')
+        profile=ETC/'storage.json'
+        if profile.stat().st_mode & 0o077 or profile.stat().st_uid!=0:raise RuntimeError('storage.json должен принадлежать root с правами 0600')
+        local_storage=json.loads(profile.read_text());a.es_nodes=local_storage['nodes'];a.es_protocol='https';a.es_user=local_storage['user']
+        if not Path(local_storage['ca']).is_file():raise RuntimeError('Не найден CA Elasticsearch')
     if a.storage=='elasticsearch':
         if not a.es_nodes or not re.fullmatch(r'[A-Za-z0-9.:-]+(?::\d+)?(?:,[A-Za-z0-9.:-]+(?::\d+)?)*',a.es_nodes):raise RuntimeError('Укажите --es-nodes host:9200 без логина и пароля')
     archive=acquire('server',a.archive)
@@ -141,6 +157,10 @@ def server(a):
         upstream=candidates[0].parent
         if not (upstream/'LICENSE').is_file() or not (upstream/'NOTICE').is_file():raise RuntimeError('Нет LICENSE/NOTICE')
         account();shutil.copytree(upstream,target)
+    if a.alarm_rules=='ibatyr':
+        config=target/'config/alarm-settings.yml'
+        shutil.copy2(config,config.with_suffix('.yml.upstream'))
+        shutil.copy2(ROOT/'config/ibatyr-alarm-settings.yml',config)
     logs=target/'logs';logs.mkdir(exist_ok=True);shutil.chown(logs,user='ibatyr',group='ibatyr')
     values={'SW_STORAGE':'h2' if a.storage=='demo' else 'elasticsearch','SW_CORE_REST_HOST':'127.0.0.1','SW_CORE_GRPC_HOST':a.agent_bind,
        'SW_PROMQL_REST_HOST':'127.0.0.1','SW_LOGQL_REST_HOST':'127.0.0.1','SW_RECEIVER_AWS_FIREHOSE_HTTP_HOST':'127.0.0.1',
@@ -150,7 +170,14 @@ def server(a):
         import getpass
         values['SW_STORAGE_ES_HTTP_PROTOCOL']=a.es_protocol
         if a.es_user:
-            values['SW_ES_USER']=a.es_user;values['SW_ES_PASSWORD']=getpass.getpass('Пароль хранилища: ')
+            values['SW_ES_USER']=a.es_user;values['SW_ES_PASSWORD']=local_storage['password'] if local_storage else getpass.getpass('Пароль хранилища: ')
+        if local_storage:
+            account()
+            store=ETC/'elasticsearch-trust.jks'
+            keytool=Path(java).resolve().parent/'keytool'
+            run(keytool,'-importcert','-noprompt','-alias','ibatyr-es','-file',local_storage['ca'],'-keystore',store,'-storetype','JKS','-storepass','changeit')
+            store.chmod(0o640);shutil.chown(store,user='root',group='ibatyr');shutil.chown(ETC,user='root',group='ibatyr')
+            values.update({'SW_NAMESPACE':local_storage['namespace'],'SW_STORAGE_ES_SSL_JKS_PATH':str(store),'SW_STORAGE_ES_SSL_JKS_PASS':'changeit','SW_STORAGE_ES_INDEX_REPLICAS_NUMBER':'0','SW_STORAGE_ES_SUPER_DATASET_INDEX_REPLICAS_NUMBER':'0'})
     write(env,envtext(values),0o600)
     # Own launcher keeps upstream files unmodified and preserves all notices.
     launcher=target/'ibatyr-oap.sh'
@@ -184,7 +211,9 @@ def agent(a):
 def main():
     p=argparse.ArgumentParser(description=__doc__);sub=p.add_subparsers(dest='action',required=True)
     s=sub.add_parser('shell');s.add_argument('--oap',default='http://127.0.0.1:12800/graphql');s.add_argument('--port',type=int,default=8010);s.add_argument('--public-key');s.add_argument('--import-config');s.add_argument('--import-license-dir')
-    s=sub.add_parser('server');s.add_argument('--storage',choices=['demo','elasticsearch'],required=True);s.add_argument('--es-nodes');s.add_argument('--es-protocol',choices=['http','https'],default='http');s.add_argument('--es-user');s.add_argument('--agent-bind',default='127.0.0.1');s.add_argument('--archive')
+    s=sub.add_parser('server');s.add_argument('--storage',choices=['demo','elasticsearch'],required=True);s.add_argument('--es-nodes');s.add_argument('--es-protocol',choices=['http','https'],default='http');s.add_argument('--es-user');s.add_argument('--agent-bind',default='127.0.0.1');s.add_argument('--archive');s.add_argument('--local-elasticsearch',action='store_true');s.add_argument('--alarm-rules',choices=['ibatyr','upstream'],default='ibatyr')
+    s=sub.add_parser('elasticsearch');s.add_argument('--version',required=True);s.add_argument('--heap-gb',type=int,default=2)
+    sub.add_parser('storage_setup')
     s=sub.add_parser('agent');s.add_argument('--collector',required=True);s.add_argument('--service-name',required=True);s.add_argument('--app-user',required=True);s.add_argument('--archive')
     a=p.parse_args()
     try:

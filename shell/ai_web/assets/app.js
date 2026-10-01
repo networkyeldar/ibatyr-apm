@@ -18,7 +18,7 @@ async function api(path, controller = new AbortController(), options = {}) {
 }
 function setBusy(value) { state.busy=value; $('search').disabled=value||!$('service').value; $('search').textContent=value?'Загрузка…':'Обновить обзор'; updatePager(); }
 function updatePager() { $('previous').disabled=state.busy||!state.result||state.page<=1; $('next').disabled=state.busy||!state.result||!state.result.pagination.may_have_more; $('page-label').textContent=`Страница ${state.page}`; }
-function invalidateDetails() { $('export-trace').disabled=true;invalidateAI(); state.detailController?.abort(); state.detailVersion++; state.detail=null; state.selected=null; $('detail').replaceChildren(el('div','Выберите вызов слева','empty detail-empty')); }
+function invalidateDetails() { $('export-trace').disabled=true;invalidateAI(); state.detailController?.abort(); state.detailVersion++; state.detail=null; state.selected=null; syncAI(); $('detail').replaceChildren(el('div','Выберите вызов слева','empty detail-empty')); }
 function readQuery() {
   const start=$('start').value, end=$('end').value, offset=$('timezone').value;
   const addSeconds = value => value.length===16?value+':00':value;
@@ -35,7 +35,7 @@ async function search(page, newQuery=false) {
   try { query=newQuery?readQuery():state.query; if(!query) return; } catch(error) { status(error.message,true); return; }
   state.listController?.abort(); const controller=new AbortController(); state.listController=controller;
   const version=++state.listVersion; invalidateDetails(); state.page=page; state.query=query; state.result=null; $('records').replaceChildren(); $('sample-stats').replaceChildren(); $('list-warnings').replaceChildren(); $('period').textContent='Выполняется поиск…';
-  setBusy(true); if(newQuery) loadDashboard(query); status('Загружаем сохранённые сегменты…');
+  setBusy(true); if(newQuery) {loadDashboard(query); loadAlerts(query,1);} status('Загружаем сохранённые сегменты…');
   try {
     const params=new URLSearchParams({...query,page});
     const data=await api('/api/ai/traces?'+params,controller); if(version!==state.listVersion) return;
@@ -111,18 +111,18 @@ function renderDetailTab(container) {
     card.id=spanDomId(span);container.append(card);
   }
 }
-$('search-form').addEventListener('submit',event=>{event.preventDefault();search(1,true);});
+$('search-form').addEventListener('submit',event=>{event.preventDefault();pauseLive();search(1,true);});
 $('endpoint-filter').addEventListener('input',renderRows);
-$('previous').onclick=()=>search(state.page-1);
-$('next').onclick=()=>search(state.page+1);
+$('previous').onclick=()=>{pauseLive();search(state.page-1);};
+$('next').onclick=()=>{pauseLive();search(state.page+1);};
 $('whole-day').onclick=()=>{const day=$('start').value.slice(0,10);if(!day)return;const next=new Date(day+'T00:00:00Z');next.setUTCDate(next.getUTCDate()+1);$('start').value=day+'T00:00';$('end').value=next.toISOString().slice(0,10)+'T00:00';};
 
 function spanDomId(span){return 'span-'+span.segment_id+'-'+span.span_id;}
-function showLogin(){state.csrf='';state.license=null;state.licenseVersion++;$('license-dialog').close();$('license-file').value='';$('license-details').replaceChildren();$('license-banner').hidden=true;state.listVersion++;state.dashboardVersion++;state.listController?.abort();state.dashboardController?.abort();invalidateDetails();$('application').hidden=true;$('login-screen').hidden=false;for(const id of ['records','stats','sample-stats','ai-result'])$(id).replaceChildren();$('provider-key').value='';$('preview-json').textContent='';$('preview-system').textContent='';for(const id of ['settings-dialog','preview-dialog'])if($(id).open)$(id).close();}
+function showLogin(){resetLive();state.csrf='';state.license=null;state.licenseVersion++;$('license-dialog').close();$('license-file').value='';$('license-details').replaceChildren();$('license-banner').hidden=true;state.listVersion++;state.dashboardVersion++;state.listController?.abort();state.dashboardController?.abort();invalidateDetails();$('application').hidden=true;$('login-screen').hidden=false;for(const id of ['records','stats','sample-stats','ai-result'])$(id).replaceChildren();$('provider-key').value='';$('preview-json').textContent='';$('preview-system').textContent='';for(const id of ['settings-dialog','preview-dialog'])if($(id).open)$(id).close();}
 async function initialize(){
   $('login-screen').hidden=true;$('application').hidden=false;
   await refreshLicense();
-  try{const [data,profiles]=await Promise.all([api('/api/ai/services'),api('/api/ai/llm/providers')]);$('service').replaceChildren(...data.services.map(s=>{const option=el('option',s.name);option.value=s.id;return option;}));state.providers=profiles.providers;if(!data.services.length)throw new Error('Нет доступных сервисов GENERAL.');$('connection').textContent='Сервисы доступны';$('connection').className='pill good';$('search').disabled=false;syncAI();}
+  try{const [data,profiles]=await Promise.all([api('/api/ai/services'),api('/api/ai/llm/providers')]);$('service').replaceChildren(...data.services.map(s=>{const option=el('option',s.name);option.value=s.id;return option;}));state.providers=profiles.providers;if(!data.services.length){await loadAlerts(readAlertPeriod(),1);scheduleLive();throw new Error('Нет сервисов GENERAL. Алерты по другим объектам доступны; ожидаем трафик агента.');}$('connection').textContent='Сервисы доступны';$('connection').className='pill good';$('search').disabled=false;syncAI();await search(1,true);scheduleLive();}
   catch(error){$('connection').textContent='Нет подключения';$('connection').className='pill bad';status(error.message,true);}
 }
 $('login-form').addEventListener('submit',async event=>{event.preventDefault();$('login-button').disabled=true;$('login-error').textContent='';try{const data=await api('/api/ai/auth/login',new AbortController(),{method:'POST',body:JSON.stringify({username:$('login-name').value,password:$('login-password').value})});state.csrf=data.csrf_token;$('login-password').value='';await initialize();}catch(error){$('login-error').textContent=error.message;}finally{$('login-button').disabled=false;}});
@@ -131,26 +131,17 @@ $('theme-toggle').onclick=()=>{const light=document.documentElement.dataset.them
 try{document.documentElement.dataset.theme=localStorage.getItem('swai_theme')||'dark';}catch{}
 $('last-hour').onclick=()=>{const [hours,minutes]=$('timezone').value.slice(1).split(':').map(Number);const sign=$('timezone').value[0]==='-'?-1:1;const end=new Date(Date.now()+sign*(hours*60+minutes)*60000-120000);end.setUTCSeconds(0,0);const start=new Date(end-3600000);$('start').value=start.toISOString().slice(0,16);$('end').value=end.toISOString().slice(0,16);};
 
-async function loadDashboard(query){
+async function loadDashboard(query,quiet=false){
   state.dashboardController?.abort();const controller=new AbortController();state.dashboardController=controller;const version=++state.dashboardVersion;
-  $('stats').replaceChildren(el('div','Загружаем метрики за интервал…','empty'));['latency-chart','traffic-chart','errors-chart'].forEach(id=>$(id).replaceChildren(el('div','Загрузка…','empty')));$('metric-warnings').replaceChildren();
+  if(!quiet){$('stats').replaceChildren(el('div','Загружаем метрики за интервал…','empty'));['latency-chart','traffic-chart','errors-chart'].forEach(id=>$(id).replaceChildren(el('div','Загрузка…','empty')));$('metric-warnings').replaceChildren();}
   try{const params=new URLSearchParams({start:query.start,end:query.end,service_id:query.service_id});const data=await api('/api/ai/dashboard?'+params,controller);if(version!==state.dashboardVersion)return;
     const k=data.kpis;const metrics=[['Оценка числа вызовов',k.estimated_calls===null?'—':Math.round(k.estimated_calls).toLocaleString('ru-RU'),'По минутам с положительным CPM'],['Средняя задержка ≈',k.estimated_mean_latency_ms===null?'—':duration(k.estimated_mean_latency_ms),'Взвешенная оценка по CPM'],['Макс. минутный P95',k.max_minute_p95_ms===null?'—':duration(k.max_minute_p95_ms),'Не P95 за весь период'],['Оценка доли ошибок',k.estimated_error_rate_percent===null?'—':k.estimated_error_rate_percent.toLocaleString('ru-RU')+'%','По метрике успешности сервиса']];
     $('stats').replaceChildren(...metrics.map(([title,value,note])=>{const card=el('div',null,'stat');card.append(el('div',title,'stat-label'),el('div',value,'stat-value'),el('div',note,'stat-foot'));return card;}));
     drawChart('latency-chart',data.points,[['mean_latency_ms','#48bfae','Среднее'],['p95_ms','#a996f5','P95']],'мс');drawChart('traffic-chart',data.points,[['calls_per_minute','#48bfae','Вызовы']],'выз/мин');drawChart('errors-chart',data.points,[['error_rate_percent','#f08b99','Ошибки']],'%');
-    $('metric-warnings').append(el('p',`Положительная нагрузка: ${data.coverage.minutes_with_positive_traffic} из ${data.coverage.requested_minutes} минут.`),...(data.warnings||[]).map(w=>el('p',w)));
-  }catch(error){if(version!==state.dashboardVersion)return;$('stats').replaceChildren(el('div','Метрики недоступны: '+error.message,'empty bad-text'));['latency-chart','traffic-chart','errors-chart'].forEach(id=>$(id).replaceChildren(el('div','Нет данных','empty')));}
+    $('metric-warnings').replaceChildren(el('p',`Положительная нагрузка: ${data.coverage.minutes_with_positive_traffic} из ${data.coverage.requested_minutes} минут.`),...(data.warnings||[]).map(w=>el('p',w)));if(!quiet){live.lastSuccess=new Date();$('live-status').textContent='Метрики получены '+live.lastSuccess.toLocaleTimeString('ru-RU');}return true;
+  }catch(error){if(version!==state.dashboardVersion)return;if(quiet)return false;$('stats').replaceChildren(el('div','Метрики недоступны: '+error.message,'empty bad-text'));['latency-chart','traffic-chart','errors-chart'].forEach(id=>$(id).replaceChildren(el('div','Нет данных','empty')));}
 }
 function svgNode(tag,attrs={}){const n=document.createElementNS('http://www.w3.org/2000/svg',tag);for(const[k,v]of Object.entries(attrs))n.setAttribute(k,String(v));return n;}
-function drawChart(id,points,series,unit){
-  const box=$(id);box.replaceChildren();const numbers=points.flatMap(p=>series.map(([key])=>p[key])).filter(v=>v!==null&&Number.isFinite(v));if(!numbers.length){box.append(el('div','Нет наблюдений с положительной нагрузкой','empty'));return;}
-  const max=Math.max(...numbers,1),width=600,height=205,left=50,right=12,top=15,bottom=33;const x=i=>left+i/Math.max(1,points.length-1)*(width-left-right),y=v=>height-bottom-v/max*(height-top-bottom);
-  const svg=svgNode('svg',{viewBox:`0 0 ${width} ${height}`,role:'img','aria-label':`Минутные метрики, ${unit}`});
-  for(let j=0;j<=3;j++){const value=max*j/3,yy=y(value);svg.append(svgNode('line',{x1:left,y1:yy,x2:width-right,y2:yy,class:'grid-line'}));const text=svgNode('text',{x:left-8,y:yy+4,'text-anchor':'end',class:'axis-label'});text.textContent=value>=1000?(value/1000).toFixed(1)+'k':Number(value.toFixed(1));svg.append(text);}
-  for(const[key,color]of series){let path='',active=false;for(let i=0;i<points.length;i++){const v=points[i][key];if(v===null||!Number.isFinite(v)){active=false;continue;}path+=(active?'L':'M')+x(i).toFixed(2)+','+y(v).toFixed(2)+' ';active=true;}svg.append(svgNode('path',{d:path,fill:'none',stroke:color,'stroke-width':2.5,'stroke-linejoin':'round'}));if(points.length===1&&points[0][key]!==null)svg.append(svgNode('circle',{cx:x(0),cy:y(points[0][key]),r:3,fill:color}));}
-  for(const index of [0,Math.floor((points.length-1)/2),points.length-1]){const label=svgNode('text',{x:x(index),y:height-9,'text-anchor':index===0?'start':index===points.length-1?'end':'middle',class:'axis-label'});label.textContent=points[index].time.slice(11,16);svg.append(label);}
-  const tooltip=el('div','Наведите на график для значений','chart-tooltip');svg.addEventListener('mousemove',event=>{const rect=svg.getBoundingClientRect();const px=(event.clientX-rect.left)/rect.width*width;const index=Math.max(0,Math.min(points.length-1,Math.round((px-left)/(width-left-right)*(points.length-1))));const p=points[index];tooltip.textContent=p.time.slice(0,16).replace('T',' ')+' · '+series.map(([key,,label])=>`${label}: ${p[key]===null?'нет данных':Number(p[key]).toLocaleString('ru-RU')} ${unit}`).join(' · ');});box.append(svg,tooltip);
-}
 
 function currentProvider(){return state.providers.find(p=>p.id===state.provider);}
 function invalidateAI(){state.aiVersion++;state.snapshot=null;$('ai-result')?.replaceChildren(el('div','Выберите трассировку и подготовьте контекст.','empty'));if($('ai-message'))$('ai-message').textContent='';if($('ai-prepare'))$('ai-prepare').disabled=true;if($('preview-dialog')?.open)$('preview-dialog').close();}
@@ -176,4 +167,4 @@ $('license-form').onsubmit=async event=>{event.preventDefault();const file=$('li
 $('export-trace').onclick=()=>{if(state.detail)downloadJSON('ibatyr-trace.json',state.detail);};
 setInterval(()=>{if(state.csrf&&!document.hidden)refreshLicense();},60000);
 $('last-hour').click();
-(async()=>{try{const session=await api('/api/ai/auth/session');state.csrf=session.csrf_token;await initialize();}catch{showLogin();}})();
+

@@ -26,10 +26,16 @@ sudo python3 install.py shell --port 8011 \
 Туннель: `ssh -N -L 18011:127.0.0.1:8011 devadmin@100.72.85.197`.
 Проверьте браузером новую сборку до переключения с прежней.
 
+## Elasticsearch ещё не установлен
+
+Следуйте [полной инструкции установки Elasticsearch](ELASTICSEARCH.md): новый
+`install.py elasticsearch` создаёт локальный HTTPS-узел с постоянными данными,
+затем `server --storage elasticsearch --local-elasticsearch` подключает OAP.
+
 ## Чистая клиентская VM, существующее Elasticsearch
 
 Подготовьте совместимое постоянное Elasticsearch 7/8 по матрице OAP 10.1.0.
-Сам Elasticsearch не включён: его лицензия, sizing, резервное копирование,
+В server-архив сам Elasticsearch не включён; новый установщик скачивает его из APT. Для существующего кластера: его лицензия, sizing, резервное копирование,
 кластеризация и обновление требуют отдельной настройки. Не подключайте OAP
 к хранилищу другого клиента. Используйте отдельный storage endpoint/учётную запись.
 
@@ -55,7 +61,7 @@ sudo python3 install.py shell --public-key ./publisher-public.pem
 | OAP | `/opt/ibatyr/server/10.1.0`, `ibatyr-oap.service` | gRPC 11800: заданный IPv4 |
 | GraphQL | OAP 12800 | Только loopback |
 | PromQL / LogQL / Firehose | 9090 / 3100 / 12801 | Только loopback |
-| Оболочка | `/opt/ibatyr/shell/0.4.0-rc1`, `ibatyr-apm.service` | Только loopback 8010 |
+| Оболочка | `/opt/ibatyr/shell/0.5.0-rc1`, `ibatyr-apm.service` | Только loopback 8010 |
 | Настройки | `/etc/ibatyr-apm/` | root |
 | Логин, API-ключи, лицензия | `/var/lib/ibatyr-apm/` | пользователь службы ibatyr |
 

@@ -14,7 +14,7 @@ gh auth status
 git init -b main
 git add .
 git diff --cached --stat
-git commit -m "Prepare iBatyr APM deployment kit 0.4.0-rc1"
+git commit -m "Prepare iBatyr APM deployment kit 0.5.0-rc1"
 gh repo create ibatyr-apm --private --source=. --remote=origin --push
 ```
 
@@ -54,7 +54,7 @@ Build artifacts доступны из Actions после успешного за
 
 ## Безопасность GitHub Actions
 
-Workflow имеет read-only permissions для CI и contents:write только для ручного
-создания release. Перед production закрепите actions по проверенным commit SHA,
+Workflow имеет read-only permissions для CI и contents:write для
+создания draft release. Перед production закрепите actions по проверенным commit SHA,
 настройте protected branches и review. Версии зависимостей верхнего уровня закреплены;
 полный cross-platform lock с hashes/wheelhouse требует отдельной сборки.

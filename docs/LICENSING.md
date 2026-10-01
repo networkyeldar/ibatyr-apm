@@ -29,8 +29,8 @@ sudo install -m 0644 ./publisher-public.pem /var/lib/ibatyr-apm/publisher-public
 sudo -u ibatyr env \
   SW_AI_CONFIG=/var/lib/ibatyr-apm/settings.json \
   IBATYR_LICENSE_DIR=/var/lib/ibatyr-apm/license \
-  /opt/ibatyr/shell/0.4.0-rc1/.venv/bin/python \
-  /opt/ibatyr/shell/0.4.0-rc1/setup_license.py \
+  /opt/ibatyr/shell/0.5.0-rc1/.venv/bin/python \
+  /opt/ibatyr/shell/0.5.0-rc1/setup_license.py \
   --public-key /var/lib/ibatyr-apm/publisher-public.pem
 ```
 

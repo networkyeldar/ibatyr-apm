@@ -3,16 +3,18 @@
 <p align="center"><strong>От медленного API к SQL и доказательствам в трассировке</strong></p>
 <p align="center">Мониторинг · Диагностика задержек · AI-анализ · Offline-лицензии</p>
 
-**0.4.0-rc1 — кандидат для стенда.** Самостоятельная AI-оболочка и установщики
+**0.5.0-rc1 — кандидат для стенда.** Самостоятельная AI-оболочка и установщики
 сервера/Java-агента. Не требуется старый каталог `~/skywalking-ai/backend`.
 Перед клиентским production-развёртыванием пройдите [приёмку](docs/VALIDATION.md).
 
-[Релизы](https://github.com/networkyeldar/ibatyr-apm/releases) · [CI](https://github.com/networkyeldar/ibatyr-apm/actions) · [Быстрый старт](#быстрый-старт) · [Сервер](docs/SERVER.md) · [Агент](docs/AGENT.md) ·
+[Релизы](https://github.com/networkyeldar/ibatyr-apm/releases) · [CI](https://github.com/networkyeldar/ibatyr-apm/actions) · [Быстрый старт](#быстрый-старт) · [Elasticsearch с нуля](docs/ELASTICSEARCH.md) · [Алерты и Live](docs/ALERTS.md) · [Сервер](docs/SERVER.md) · [Агент](docs/AGENT.md) ·
 [Лицензирование](docs/LICENSING.md) · [Обслуживание](docs/OPERATIONS.md) ·
 [GitHub и релизы](docs/GITHUB.md) · [Результаты проверок](docs/VALIDATION.md)
 
 ## Что получает оператор
 
+- Критичные алерты OAP, исходные теги и переход к интервалу диагностики.
+- Live-обновление 15/30/60 с, интерактивные графики и сохранение выбранной трассировки.
 - Фильтры по дате, времени, сервису, длительности и признаку ошибки.
 - Обзор трафика и задержек; переход от сегмента к SQL и ошибкам конкретного span.
 - Покрытие входящего HTTP-вызова дочерними spans с учётом пересечений.
@@ -27,7 +29,7 @@ AI анализирует **одну выбранную трассировку**
 ## Быстрый старт
 
 Целевая система: **Ubuntu 24.04, Python 3.12, systemd**. Для OAP — Java 17.
-Docker не нужен. Команды выполняются из корня распакованного пакета/репозитория.
+Docker не нужен. Elasticsearch устанавливается отдельно из официального APT 8.x. Команды выполняются из корня распакованного пакета/репозитория.
 Установщик — для первой установки; занятые порты и существующие каталоги не перезаписываются.
 
 ### Получить исходники
@@ -59,6 +61,22 @@ ssh -N -L 18010:127.0.0.1:8010 USER@SERVER_IP
 
 Откройте **http://127.0.0.1:18010/ai/**. Настройте LLM и активируйте
 [лицензию](docs/LICENSING.md). Обычный просмотр не требует AI-лицензии.
+
+### Чистая VM: постоянное хранилище Elasticsearch
+
+```bash
+sudo apt-get update
+sudo apt-get install -y python3-venv openjdk-17-jre-headless ca-certificates
+sudo python3 install.py elasticsearch --version 8.19.22 --heap-gb 2
+sudo python3 install.py server --storage elasticsearch --local-elasticsearch --agent-bind 192.0.2.10
+sudo python3 install.py shell --public-key /полный/путь/public.pem
+```
+
+Замените IP на приватный адрес VM, путь — на публичный ключ издателя.
+Установка рассчитана на чистую VM с 8+ GiB RAM. Elasticsearch локальный, HTTPS,
+аутентификация, данные на диске, отдельный OAP user. Точная версия 8.x.y обязательна;
+её совместимость с OAP и полную установку проверьте на стенде.
+[Пошаговая инструкция, проверка и восстановление](docs/ELASTICSEARCH.md).
 
 ### Чистая VM: демонстрационный стенд
 
@@ -114,7 +132,7 @@ OAP и оболочка могут находиться на одной VM. Аг
 | Каталог/файл | Назначение |
 |---|---|
 | `shell/` | Полный FastAPI backend и веб-интерфейс |
-| `install.py` | Установка оболочки, OAP или агента |
+| `install.py` | Установка Elasticsearch, оболочки, OAP или агента |
 | `versions.json` | Зафиксированные upstream-версии, URL и SHA-512 |
 | `tools/issuer.py` | Выпуск лицензий **на компьютере издателя** |
 | `tools/build_release.py` | Три клиентских пакета и SHA256SUMS |
@@ -135,9 +153,9 @@ python3 tools/build_release.py --with-vendor
 
 В `packages/` появятся:
 
-- `ibatyr-apm-shell-0.4.0-rc1.tar.gz` — самостоятельная оболочка.
-- `ibatyr-apm-server-0.4.0-rc1.tar.gz` — установщик и официальный OAP внутри.
-- `ibatyr-apm-agent-0.4.0-rc1.tar.gz` — установщик и официальный Java agent внутри.
+- `ibatyr-apm-shell-0.5.0-rc1.tar.gz` — самостоятельная оболочка.
+- `ibatyr-apm-server-0.5.0-rc1.tar.gz` — установщик и официальный OAP внутри.
+- `ibatyr-apm-agent-0.5.0-rc1.tar.gz` — установщик и официальный Java agent внутри.
 - `SHA256SUMS` — контрольные суммы пакетов.
 
 Без `--with-vendor` пакеты загрузят upstream при установке и проверят SHA-512.

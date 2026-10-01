@@ -14,10 +14,11 @@ for component in ['shell','server','agent']:
     path=out/f'ibatyr-apm-{component}-{version}.tar.gz'
     with tempfile.TemporaryDirectory() as tmp:
         root=Path(tmp)/f'ibatyr-apm-{component}-{version}';root.mkdir();(root/'tools').mkdir()
-        for name in ['install.py','versions.json','VERSION','README.md','LICENSE','legal','docs','branding']:
+        for name in ['install.py','versions.json','VERSION','README.md','LICENSE','legal','docs','branding','config']:
             copy(name,root/name)
         copy('tools/artifacts.py',root/'tools/artifacts.py')
         copy('tools/doctor.py',root/'tools/doctor.py')
+        copy('tools/elastic_install.py',root/'tools/elastic_install.py')
         if component=='shell':copy('shell',root/'shell')
         elif a.with_vendor:
             archive=acquire(component);(root/'vendor').mkdir();shutil.copy2(archive,root/'vendor'/archive.name)

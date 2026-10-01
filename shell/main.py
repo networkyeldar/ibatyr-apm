@@ -32,7 +32,7 @@ async def query_oap(query, variables=None):
 
 app=FastAPI(title='iBatyr APM',docs_url=None,redoc_url=None,openapi_url=None)
 @app.get('/health')
-async def health():return {'status':'ok','product':'iBatyr APM','version':'0.4.0-rc1'}
+async def health():return {'status':'ok','product':'iBatyr APM','version':'0.5.0-rc1'}
 @app.get('/ready')
 async def ready():
     await query_oap('query { __typename }')
@@ -40,4 +40,4 @@ async def ready():
 register_traces(app,query_oap)
 register_frontend(app)
 register_ai_features(app,query_oap)
-app.version='0.4.0-rc1'
+app.version='0.5.0-rc1'
